@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# Tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node (in case any UI/docs tooling is added)
+node_modules/
+
+# Local config, secrets, and captured data — never commit
+*.local
+.env
+secrets.yaml
+config.local.*
+captures/
+*.pcap
+firmware/
+*.bin
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
