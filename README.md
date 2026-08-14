@@ -8,7 +8,7 @@ Supports PumpSpy monitors and the PitBoss+ system from Richtech Industries, whic
 
 ## Why
 
-These monitors report their telemetry to a vendor cloud service over **unencrypted HTTP**. `pumpspy-local` reads that traffic on your own network, parses it, and republishes it to Home Assistant over MQTT.
+These monitors report their telemetry to a vendor cloud service over **unencrypted HTTP**. `pumpspy-local` reads that traffic on your own network, parses it, and turns it into Home Assistant entities.
 
 The result is real-time, entirely local sensors — no account, no credentials sent anywhere, and no dependency on the vendor's servers being up or their API staying the same.
 
@@ -22,7 +22,7 @@ Other Home Assistant integrations for these pumps authenticate to the vendor's c
 
 1. A DNS redirect on your network points the device's reporting hostname at the machine running `pumpspy-local` — a rewrite in AdGuard Home or Pi-hole, or a DNS setting on an isolated VLAN.
 2. `pumpspy-local` receives the device's HTTP telemetry and:
-   - publishes readings to Home Assistant via **MQTT discovery** (entities are created automatically), and
+   - creates Home Assistant entities from it automatically, and
    - forwards the original requests upstream to the vendor, unmodified.
 
 Nothing is installed on the device. Its firmware is never modified.
@@ -38,14 +38,14 @@ Nothing is installed on the device. Its firmware is never modified.
 
 ## Features
 
-- Home Assistant MQTT discovery — entities appear with no manual configuration
+- Entities appear automatically — no MQTT broker, no YAML
 - Real-time updates, as the device reports
 - Firmware update **capture and hold-for-approval** — new firmware can be quarantined for your review instead of installing silently (opt-in, off by default)
-- Ships as a Home Assistant add-on and as a standalone Docker image
+- Installs through HACS, and works on Home Assistant OS, Supervised, Container, and Core
 
 ## Requirements
 
-- An MQTT broker reachable by Home Assistant (e.g. the Mosquitto add-on)
+- [HACS](https://hacs.xyz/) for installation
 - The ability to override DNS for the device on your network
 
 ## Status
