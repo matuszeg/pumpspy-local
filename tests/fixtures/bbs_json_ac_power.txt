@@ -1,0 +1,1 @@
+{"deviceid": 11111111111111, "utcunixtime": 1786665642000,"json": "{\"ac_power\": 0}" }

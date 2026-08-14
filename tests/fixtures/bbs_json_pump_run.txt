@@ -1,0 +1,1 @@
+{"deviceid": 11111111111111, "utcunixtime": 1786665582000,"json": "{\"motor\": 1, \"time\": 82 ,\"mamp\": 2800, \"battery_voltage\": 13309, \"loaded\": 12688}" }
