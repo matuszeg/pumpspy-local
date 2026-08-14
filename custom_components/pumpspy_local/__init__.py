@@ -24,12 +24,12 @@ from .const import (
     signal_device_update,
 )
 from .core.forward import ProxyRequest, forward
-from .core.parser import BbsReading, parse_request
+from .core.parser import BbsReading, Ping, parse_request
 from .core.state import DeviceState
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.SENSOR]
+PLATFORMS = [Platform.BINARY_SENSOR, Platform.SENSOR]
 
 # Headers that describe this hop rather than the request, and must not be relayed.
 _HOP_BY_HOP = {
@@ -59,15 +59,16 @@ class PumpspyRuntime:
     runner: web.AppRunner | None = None
     devices: dict[str, DeviceState] = field(default_factory=dict)
 
-    def apply(self, reading: BbsReading) -> DeviceState:
-        """Merge a reading into the state for its device, creating it if new."""
-        device = self.devices.get(reading.device_id)
-        if device is None:
-            device = DeviceState(device_id=reading.device_id)
-            self.devices[reading.device_id] = device
-            _LOGGER.info("discovered device %s", reading.device_id)
-        device.apply(reading)
-        return device
+    def device_for(self, device_id: str) -> tuple[DeviceState, bool]:
+        """The state for a device, creating it the first time it reports."""
+        device = self.devices.get(device_id)
+        if device is not None:
+            return device, False
+
+        device = DeviceState(device_id=device_id)
+        self.devices[device_id] = device
+        _LOGGER.info("discovered device %s", device_id)
+        return device, True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -78,6 +79,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     session = async_get_clientsession(hass)
     runtime = PumpspyRuntime()
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime
+
+    def _record(runtime: PumpspyRuntime, parsed: object) -> None:
+        """Fold a parsed message into device state and tell the entities."""
+        touched: list[tuple[DeviceState, bool]] = []
+
+        if isinstance(parsed, BbsReading):
+            device, is_new = runtime.device_for(parsed.device_id)
+            device.apply(parsed)
+            touched.append((device, is_new))
+        elif isinstance(parsed, list):
+            for item in parsed:
+                if isinstance(item, Ping):
+                    device, is_new = runtime.device_for(item.device_id)
+                    device.apply_ping(item)
+                    touched.append((device, is_new))
+
+        for device, is_new in touched:
+            if is_new:
+                async_dispatcher_send(hass, SIGNAL_NEW_DEVICE, device)
+            async_dispatcher_send(hass, signal_device_update(device.device_id))
 
     async def handle(request: web.Request) -> web.Response:
         proxied = ProxyRequest(
@@ -99,13 +120,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # put at risk by it. parse_request never raises, and this is a few
         # microseconds of pure CPU on a ~100 byte body, so it stays inline
         # rather than becoming a task that would only add scheduling overhead.
-        parsed = parse_request(proxied.path, proxied.body)
-        if isinstance(parsed, BbsReading):
-            is_new = parsed.device_id not in runtime.devices
-            device = runtime.apply(parsed)
-            if is_new:
-                async_dispatcher_send(hass, SIGNAL_NEW_DEVICE, device)
-            async_dispatcher_send(hass, signal_device_update(device.device_id))
+        _record(runtime, parse_request(proxied.path, proxied.body))
 
         return web.Response(status=response.status, body=response.body)
 

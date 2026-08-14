@@ -171,6 +171,20 @@ async def test_a_posted_reading_becomes_device_state(hass, upstream, free_port):
     assert device.battery_volts == 13.324
 
 
+async def test_a_posted_ping_becomes_wifi_signal(hass, upstream, free_port):
+    """A /pings body is an array, and a device can first appear through one."""
+    entry = await _setup(hass, upstream, free_port)
+    body = (Path(__file__).parent / "fixtures" / "pings_rssi_type1.txt").read_bytes()
+
+    async with ClientSession() as session:
+        async with session.post(f"http://127.0.0.1:{free_port}/pings", data=body):
+            pass
+    await hass.async_block_till_done()
+
+    device = runtime_of(hass, entry).devices["11111111111111"]
+    assert device.wifi_dbm == -46.0
+
+
 async def test_a_parse_failure_does_not_break_forwarding(hass, upstream, free_port):
     """Parsing runs beside delivery to the vendor. It must never cost a delivery."""
     entry = await _setup(hass, upstream, free_port)
@@ -199,7 +213,7 @@ async def test_a_reading_creates_a_battery_voltage_entity(hass, upstream, free_p
     sensors = [
         state
         for state in hass.states.async_all("sensor")
-        if "battery_voltage" in state.entity_id
+        if state.entity_id.endswith("battery_voltage")
     ]
     assert len(sensors) == 1
     assert sensors[0].state == "13.324"
@@ -225,6 +239,52 @@ async def test_entities_are_grouped_under_a_device(hass, upstream, free_port):
     assert device is not None
     assert device.manufacturer == "Richtech"
     assert device.model == "PumpSpy / PitBoss+"
+
+
+async def test_the_whole_entity_set_appears_with_the_right_values(
+    hass, upstream, free_port
+):
+    """Feed one of each captured message and check what a user would see."""
+    await _setup(hass, upstream, free_port)
+    fixtures = Path(__file__).parent / "fixtures"
+    messages = [
+        ("/bbs_json", "bbs_json_pump_run.txt"),
+        ("/bbs_json", "bbs_json_ac_power.txt"),
+        ("/bbs_json", "bbs_json_high_water.txt"),
+        ("/bbs_json", "bbs_json_motor_fail.txt"),
+        ("/pings", "pings_rssi_type1.txt"),
+    ]
+
+    async with ClientSession() as session:
+        for path, name in messages:
+            async with session.post(
+                f"http://127.0.0.1:{free_port}{path}",
+                data=(fixtures / name).read_bytes(),
+            ):
+                pass
+    await hass.async_block_till_done()
+
+    def state_ending(suffix: str) -> str:
+        matches = [
+            state
+            for state in hass.states.async_all()
+            if state.entity_id.endswith(suffix)
+        ]
+        assert len(matches) == 1, f"{suffix}: {[m.entity_id for m in matches]}"
+        return matches[0].state
+
+    # The pump run carried both voltages; later messages must not have erased them.
+    assert state_ending("battery_voltage") == "13.309"
+    assert state_ending("battery_voltage_under_load") == "12.688"
+    assert state_ending("wifi_signal") == "-46.0"
+
+    assert state_ending("last_pump") == "primary"
+    assert state_ending("last_run_duration") == "8.2"
+    assert state_ending("last_run_current") == "2800"
+
+    assert state_ending("mains_power") == "off"  # ac_power 0 means mains lost
+    assert state_ending("high_water") == "on"
+    assert state_ending("pump_failure") == "on"
 
 
 async def test_unloading_releases_the_port(hass, upstream, free_port):

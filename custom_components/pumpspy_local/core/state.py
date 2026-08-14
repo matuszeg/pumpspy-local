@@ -10,7 +10,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .parser import BbsReading, PumpRun
+from .parser import BbsReading, Ping, PumpRun
+
+# ``idpings_data_type`` 1 is Wi-Fi RSSI. Type 3 has been seen (~5.86) but nobody
+# has confirmed what it means, so it is deliberately not mapped to anything.
+PING_WIFI_RSSI = 1
 
 
 @dataclass
@@ -24,6 +28,7 @@ class DeviceState:
     high_water: bool | None = None
     motor_fail: bool | None = None
     last_run: PumpRun | None = None
+    wifi_dbm: float | None = None
 
     def apply(self, reading: BbsReading) -> None:
         """Merge a reading in, leaving fields it does not mention alone."""
@@ -40,3 +45,8 @@ class DeviceState:
 
         if reading.pump_run is not None:
             self.last_run = reading.pump_run
+
+    def apply_ping(self, ping: Ping) -> None:
+        """Merge a ping in. Unrecognised types are left alone, not guessed at."""
+        if ping.data_type == PING_WIFI_RSSI:
+            self.wifi_dbm = ping.value

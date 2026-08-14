@@ -1,25 +1,99 @@
 """Sensor entities.
 
-Entities are created when a device first reports, not from configuration —
-the device id arrives in the telemetry, so there is nothing to ask the user for.
+Entities are created when a device first reports, not from configuration — the
+device id arrives in the telemetry, so there is nothing to ask the user for.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
+
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
+    SensorEntityDescription,
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfElectricPotential
+from homeassistant.const import (
+    EntityCategory,
+    UnitOfElectricCurrent,
+    UnitOfElectricPotential,
+    UnitOfTime,
+)
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, MANUFACTURER, MODEL, SIGNAL_NEW_DEVICE, signal_device_update
+from .const import DOMAIN, SIGNAL_NEW_DEVICE
 from .core.state import DeviceState
+from .entity import PumpspyEntity
+
+
+@dataclass(frozen=True, kw_only=True)
+class PumpspySensorDescription(SensorEntityDescription):
+    """A sensor and how to read it out of device state."""
+
+    value_fn: Callable[[DeviceState], float | str | None]
+
+
+SENSORS: tuple[PumpspySensorDescription, ...] = (
+    PumpspySensorDescription(
+        key="battery_voltage",
+        name="Battery voltage",
+        device_class=SensorDeviceClass.VOLTAGE,
+        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda device: device.battery_volts,
+    ),
+    PumpspySensorDescription(
+        key="battery_voltage_under_load",
+        name="Battery voltage under load",
+        device_class=SensorDeviceClass.VOLTAGE,
+        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+        state_class=SensorStateClass.MEASUREMENT,
+        # Only reported alongside a pump run, so this updates on runs only.
+        # That is the reading that actually reveals a dying battery.
+        value_fn=lambda device: device.loaded_volts,
+    ),
+    PumpspySensorDescription(
+        key="wifi_signal",
+        # "Wi-Fi signal" would slugify to wi_fi_signal, which is awkward to type
+        # in an automation.
+        name="WiFi signal",
+        device_class=SensorDeviceClass.SIGNAL_STRENGTH,
+        native_unit_of_measurement="dBm",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda device: device.wifi_dbm,
+    ),
+    PumpspySensorDescription(
+        key="last_pump",
+        name="Last pump",
+        device_class=SensorDeviceClass.ENUM,
+        options=["primary", "backup"],
+        value_fn=lambda device: device.last_run.pump if device.last_run else None,
+    ),
+    PumpspySensorDescription(
+        key="last_run_duration",
+        name="Last run duration",
+        device_class=SensorDeviceClass.DURATION,
+        native_unit_of_measurement=UnitOfTime.SECONDS,
+        value_fn=lambda device: (
+            device.last_run.duration_seconds if device.last_run else None
+        ),
+    ),
+    PumpspySensorDescription(
+        key="last_run_current",
+        name="Last run current",
+        device_class=SensorDeviceClass.CURRENT,
+        native_unit_of_measurement=UnitOfElectricCurrent.MILLIAMPERE,
+        value_fn=lambda device: (
+            device.last_run.current_milliamps if device.last_run else None
+        ),
+    ),
+)
 
 
 async def async_setup_entry(
@@ -32,7 +106,9 @@ async def async_setup_entry(
 
     @callback
     def _add(device: DeviceState) -> None:
-        async_add_entities([BatteryVoltage(device)])
+        async_add_entities(
+            PumpspySensor(device, description) for description in SENSORS
+        )
 
     # A device may already have reported before this platform finished loading.
     for device in runtime.devices.values():
@@ -41,43 +117,11 @@ async def async_setup_entry(
     entry.async_on_unload(async_dispatcher_connect(hass, SIGNAL_NEW_DEVICE, _add))
 
 
-class PumpspyEntity(SensorEntity):
-    """Shared wiring: identity, and refreshing when the device reports."""
+class PumpspySensor(PumpspyEntity, SensorEntity):
+    """A reading pulled out of device state."""
 
-    _attr_has_entity_name = True
-    _attr_should_poll = False
-
-    def __init__(self, device: DeviceState, key: str) -> None:
-        self._device = device
-        self._attr_unique_id = f"{device.device_id}_{key}"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, device.device_id)},
-            manufacturer=MANUFACTURER,
-            model=MODEL,
-            name=f"PumpSpy {device.device_id}",
-        )
-
-    async def async_added_to_hass(self) -> None:
-        self.async_on_remove(
-            async_dispatcher_connect(
-                self.hass,
-                signal_device_update(self._device.device_id),
-                self.async_write_ha_state,
-            )
-        )
-
-
-class BatteryVoltage(PumpspyEntity):
-    """Resting battery voltage."""
-
-    _attr_name = "Battery voltage"
-    _attr_device_class = SensorDeviceClass.VOLTAGE
-    _attr_native_unit_of_measurement = UnitOfElectricPotential.VOLT
-    _attr_state_class = SensorStateClass.MEASUREMENT
-
-    def __init__(self, device: DeviceState) -> None:
-        super().__init__(device, "battery_voltage")
+    entity_description: PumpspySensorDescription
 
     @property
-    def native_value(self) -> float | None:
-        return self._device.battery_volts
+    def native_value(self) -> float | str | None:
+        return self.entity_description.value_fn(self._device)
