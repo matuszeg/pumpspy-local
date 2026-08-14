@@ -6,8 +6,10 @@ grouped under a device at all.
 """
 
 import pytest
+import voluptuous_serialize
 from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers import config_validation as cv
 
 from custom_components.pumpspy_local.const import DOMAIN
 
@@ -31,6 +33,22 @@ async def test_the_form_is_offered(hass, socket_enabled):
 
     assert result["type"] == FlowResultType.FORM
     assert result["step_id"] == "user"
+
+
+async def test_the_form_can_be_serialised_for_the_frontend(hass, socket_enabled):
+    """Driving the flow from Python is not enough to know the dialog works.
+
+    The UI fetches the form over HTTP, which converts the schema to JSON. A
+    validator that cannot be converted returns a 500 and the dialog never
+    opens, while a Python-level test of the same flow passes happily.
+    """
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+
+    voluptuous_serialize.convert(
+        result["data_schema"], custom_serializer=cv.custom_serializer
+    )
 
 
 async def test_completing_the_form_creates_an_entry(hass, upstream, free_port):

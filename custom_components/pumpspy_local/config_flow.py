@@ -6,7 +6,7 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
-from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import selector
 
 from .const import (
     CONF_PORT,
@@ -16,10 +16,19 @@ from .const import (
     DOMAIN,
 )
 
+# Selectors rather than cv.port / cv.url on purpose. The frontend fetches this
+# schema as JSON, and a bare validator function cannot be serialised: the dialog
+# then fails with a 500 while a Python-level test of the same flow still passes.
 SCHEMA = vol.Schema(
     {
-        vol.Required(CONF_PORT, default=DEFAULT_PORT): cv.port,
-        vol.Required(CONF_UPSTREAM, default=DEFAULT_UPSTREAM): cv.url,
+        vol.Required(CONF_PORT, default=DEFAULT_PORT): selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=1, max=65535, mode=selector.NumberSelectorMode.BOX
+            )
+        ),
+        vol.Required(CONF_UPSTREAM, default=DEFAULT_UPSTREAM): selector.TextSelector(
+            selector.TextSelectorConfig(type=selector.TextSelectorType.URL)
+        ),
     }
 )
 
@@ -37,6 +46,8 @@ class PumpspyLocalConfigFlow(ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="single_instance_allowed")
 
         if user_input is not None:
-            return self.async_create_entry(title="pumpspy-local", data=user_input)
+            # NumberSelector hands back a float; the port has to be an int.
+            data = {**user_input, CONF_PORT: int(user_input[CONF_PORT])}
+            return self.async_create_entry(title="pumpspy-local", data=data)
 
         return self.async_show_form(step_id="user", data_schema=SCHEMA)
