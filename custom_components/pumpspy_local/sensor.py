@@ -11,25 +11,24 @@ from homeassistant.components.sensor import (
     SensorEntity,
     SensorStateClass,
 )
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfElectricPotential
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
 from .const import DOMAIN, MANUFACTURER, MODEL, SIGNAL_NEW_DEVICE, signal_device_update
 from .core.state import DeviceState
 
 
-async def async_setup_platform(
+async def async_setup_entry(
     hass: HomeAssistant,
-    config: ConfigType,
+    entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
-    discovery_info: DiscoveryInfoType | None = None,
 ) -> None:
     """Set up sensors, now and as devices appear."""
-    runtime = hass.data[DOMAIN]
+    runtime = hass.data[DOMAIN][entry.entry_id]
 
     @callback
     def _add(device: DeviceState) -> None:
@@ -39,7 +38,7 @@ async def async_setup_platform(
     for device in runtime.devices.values():
         _add(device)
 
-    async_dispatcher_connect(hass, SIGNAL_NEW_DEVICE, _add)
+    entry.async_on_unload(async_dispatcher_connect(hass, SIGNAL_NEW_DEVICE, _add))
 
 
 class PumpspyEntity(SensorEntity):

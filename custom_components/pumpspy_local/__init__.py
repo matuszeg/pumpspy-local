@@ -1,7 +1,7 @@
 """Local monitoring for PumpSpy / PitBoss+ sump pump battery backup systems.
 
-Walking skeleton: bind the device's reporting port, relay everything upstream
-unmodified, return the upstream reply. No parsing and no entities yet.
+Binds the port the device reports to, relays every request upstream unmodified,
+returns the upstream reply, and turns what it sees into Home Assistant entities.
 """
 
 from __future__ import annotations
@@ -9,25 +9,27 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
-import voluptuous as vol
 from aiohttp import web
-from homeassistant.const import EVENT_HOMEASSISTANT_STOP, Platform
-from homeassistant.core import Event, HomeAssistant
-from homeassistant.helpers import config_validation as cv, discovery
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import Platform
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
-from homeassistant.helpers.typing import ConfigType
 
-from .const import DOMAIN, SIGNAL_NEW_DEVICE, signal_device_update
+from .const import (
+    CONF_PORT,
+    CONF_UPSTREAM,
+    DOMAIN,
+    SIGNAL_NEW_DEVICE,
+    signal_device_update,
+)
 from .core.forward import ProxyRequest, forward
 from .core.parser import BbsReading, parse_request
 from .core.state import DeviceState
 
 _LOGGER = logging.getLogger(__name__)
 
-CONF_PORT = "port"
-CONF_UPSTREAM = "upstream"
-DEFAULT_PORT = 8081
+PLATFORMS = [Platform.SENSOR]
 
 # Headers that describe this hop rather than the request, and must not be relayed.
 _HOP_BY_HOP = {
@@ -68,30 +70,14 @@ class PumpspyRuntime:
         return device
 
 
-CONFIG_SCHEMA = vol.Schema(
-    {
-        DOMAIN: vol.Schema(
-            {
-                vol.Optional(CONF_PORT, default=DEFAULT_PORT): cv.port,
-                # Required on purpose: no default that could send a developer's
-                # traffic to the vendor by accident.
-                vol.Required(CONF_UPSTREAM): cv.url,
-            }
-        )
-    },
-    extra=vol.ALLOW_EXTRA,
-)
-
-
-async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Start the listener the device reports to."""
-    conf = config[DOMAIN]
-    port: int = conf[CONF_PORT]
-    upstream: str = conf[CONF_UPSTREAM].rstrip("/")
+    port: int = entry.data[CONF_PORT]
+    upstream: str = entry.data[CONF_UPSTREAM].rstrip("/")
 
     session = async_get_clientsession(hass)
     runtime = PumpspyRuntime()
-    hass.data[DOMAIN] = runtime
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime
 
     async def handle(request: web.Request) -> web.Response:
         proxied = ProxyRequest(
@@ -129,16 +115,19 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", port).start()
-    # Kept so the listener can be shut down without stopping Home Assistant.
     runtime.runner = runner
     _LOGGER.info("listening on :%s, forwarding to %s", port, upstream)
 
-    hass.async_create_task(
-        discovery.async_load_platform(hass, Platform.SENSOR, DOMAIN, {}, config)
-    )
-
-    async def _shutdown(_: Event) -> None:
-        await runner.cleanup()
-
-    hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _shutdown)
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Stop the listener and release the port."""
+    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if unloaded:
+        runtime: PumpspyRuntime = hass.data[DOMAIN].pop(entry.entry_id)
+        if runtime.runner is not None:
+            await runtime.runner.cleanup()
+        _LOGGER.info("listener stopped")
+    return unloaded

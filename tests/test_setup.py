@@ -5,14 +5,16 @@ config flow and entity platforms can be built on top without re-testing by hand.
 """
 
 import asyncio
+import socket
 from pathlib import Path
 
 import pytest
 import pytest_asyncio
 from aiohttp import ClientSession
-from homeassistant.setup import async_setup_component
+from homeassistant.helpers import device_registry as dr
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.pumpspy_local import DOMAIN
+from custom_components.pumpspy_local.const import DOMAIN
 
 
 @pytest.fixture(autouse=True)
@@ -45,23 +47,23 @@ async def shutdown_listener(hass):
     harness rightly fails them as lingering tasks.
     """
     yield
-    runtime = hass.data.get(DOMAIN)
-    if runtime is not None and runtime.runner is not None:
-        await runtime.runner.cleanup()
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def _setup(hass, upstream, port) -> None:
-    assert await async_setup_component(
-        hass,
-        DOMAIN,
-        {
-            DOMAIN: {
-                "port": port,
-                "upstream": f"http://{upstream.host}:{upstream.port}",
-            }
-        },
+async def _setup(hass, upstream, port) -> MockConfigEntry:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"port": port, "upstream": f"http://{upstream.host}:{upstream.port}"},
     )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
+    return entry
+
+
+def runtime_of(hass, entry) -> object:
+    return hass.data[DOMAIN][entry.entry_id]
 
 
 async def test_setup_binds_the_port_and_relays_to_upstream(hass, upstream, free_port):
@@ -157,7 +159,7 @@ async def test_double_space_in_the_request_line_is_accepted(hass, upstream, free
 
 async def test_a_posted_reading_becomes_device_state(hass, upstream, free_port):
     """The end-to-end path: bytes on the wire become something an entity can read."""
-    await _setup(hass, upstream, free_port)
+    entry = await _setup(hass, upstream, free_port)
     body = (Path(__file__).parent / "fixtures" / "bbs_json_plain_battery.txt").read_bytes()
 
     async with ClientSession() as session:
@@ -165,13 +167,13 @@ async def test_a_posted_reading_becomes_device_state(hass, upstream, free_port):
             pass
     await hass.async_block_till_done()
 
-    device = hass.data[DOMAIN].devices["11111111111111"]
+    device = runtime_of(hass, entry).devices["11111111111111"]
     assert device.battery_volts == 13.324
 
 
 async def test_a_parse_failure_does_not_break_forwarding(hass, upstream, free_port):
     """Parsing runs beside delivery to the vendor. It must never cost a delivery."""
-    await _setup(hass, upstream, free_port)
+    entry = await _setup(hass, upstream, free_port)
 
     async with ClientSession() as session:
         async with session.post(
@@ -181,7 +183,7 @@ async def test_a_parse_failure_does_not_break_forwarding(hass, upstream, free_po
     await hass.async_block_till_done()
 
     assert upstream.received["body"] == b"utter nonsense"
-    assert hass.data[DOMAIN].devices == {}
+    assert runtime_of(hass, entry).devices == {}
 
 
 async def test_a_reading_creates_a_battery_voltage_entity(hass, upstream, free_port):
@@ -201,3 +203,37 @@ async def test_a_reading_creates_a_battery_voltage_entity(hass, upstream, free_p
     ]
     assert len(sensors) == 1
     assert sensors[0].state == "13.324"
+
+
+async def test_entities_are_grouped_under_a_device(hass, upstream, free_port):
+    """Home Assistant only registers devices for entities on a config entry.
+
+    Under YAML setup the DeviceInfo was silently ignored and the sensors sat
+    loose in the entity list, which is why setup moved to a config entry.
+    """
+    await _setup(hass, upstream, free_port)
+    body = (Path(__file__).parent / "fixtures" / "bbs_json_plain_battery.txt").read_bytes()
+
+    async with ClientSession() as session:
+        async with session.post(f"http://127.0.0.1:{free_port}/bbs_json", data=body):
+            pass
+    await hass.async_block_till_done()
+
+    device = dr.async_get(hass).async_get_device(
+        identifiers={(DOMAIN, "11111111111111")}
+    )
+    assert device is not None
+    assert device.manufacturer == "Richtech"
+    assert device.model == "PumpSpy / PitBoss+"
+
+
+async def test_unloading_releases_the_port(hass, upstream, free_port):
+    """A reconfigure or reload must not leave the port held."""
+    entry = await _setup(hass, upstream, free_port)
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    with socket.socket() as probe:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        probe.bind(("0.0.0.0", free_port))  # raises if the listener still holds it

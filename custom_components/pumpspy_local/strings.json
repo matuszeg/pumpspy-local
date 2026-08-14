@@ -1,0 +1,21 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "pumpspy-local",
+        "description": "Point your DNS rewrite for www.pumpspy.com at this machine, then set the port the device reports to and where its traffic should be forwarded.",
+        "data": {
+          "port": "Listen port",
+          "upstream": "Forward to"
+        },
+        "data_description": {
+          "port": "The port the device posts to. Leave at 8081 unless you know otherwise.",
+          "upstream": "Where the device's traffic is relayed so the vendor app keeps working."
+        }
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "pumpspy-local is already set up. One listener handles every device that reports to it."
+    }
+  }
+}
