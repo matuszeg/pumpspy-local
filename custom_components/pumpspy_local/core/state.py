@@ -30,6 +30,12 @@ class DeviceState:
     last_run: PumpRun | None = None
     wifi_dbm: float | None = None
 
+    # A run reported before the event entity existed -- which happens whenever a
+    # device's very first message is a pump run, since the entity is created in
+    # response to that same message. The entity fires and clears it once it is
+    # listening. In memory only, so a restart cannot replay a stale run.
+    unfired_run: PumpRun | None = None
+
     def apply(self, reading: BbsReading) -> None:
         """Merge a reading in, leaving fields it does not mention alone."""
         for field in (

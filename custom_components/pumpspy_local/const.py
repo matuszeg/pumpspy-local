@@ -22,3 +22,12 @@ SIGNAL_NEW_DEVICE = f"{DOMAIN}_new_device"
 def signal_device_update(device_id: str) -> str:
     """Signal fired when a device's state changes."""
     return f"{DOMAIN}_update_{device_id}"
+
+
+def signal_pump_run(device_id: str) -> str:
+    """Signal fired with a PumpRun when a device reports a pump cycle.
+
+    Separate from the state-update signal because a run is an occurrence, not a
+    value: firing it on every message would invent runs that never happened.
+    """
+    return f"{DOMAIN}_pump_run_{device_id}"

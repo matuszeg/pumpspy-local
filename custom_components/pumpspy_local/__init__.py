@@ -22,6 +22,7 @@ from .const import (
     DOMAIN,
     SIGNAL_NEW_DEVICE,
     signal_device_update,
+    signal_pump_run,
 )
 from .core.forward import ProxyRequest, forward
 from .core.parser import BbsReading, Ping, parse_request
@@ -29,7 +30,7 @@ from .core.state import DeviceState
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.BINARY_SENSOR, Platform.SENSOR]
+PLATFORMS = [Platform.BINARY_SENSOR, Platform.EVENT, Platform.SENSOR]
 
 # Headers that describe this hop rather than the request, and must not be relayed.
 _HOP_BY_HOP = {
@@ -88,6 +89,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             device, is_new = runtime.device_for(parsed.device_id)
             device.apply(parsed)
             touched.append((device, is_new))
+            if parsed.pump_run is not None:
+                # Set before dispatching: on a device's first message the event
+                # entity does not exist yet, and picks this up when it is added.
+                device.unfired_run = parsed.pump_run
+                async_dispatcher_send(
+                    hass, signal_pump_run(device.device_id), parsed.pump_run
+                )
         elif isinstance(parsed, list):
             for item in parsed:
                 if isinstance(item, Ping):

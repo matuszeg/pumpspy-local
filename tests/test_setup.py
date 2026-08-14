@@ -287,6 +287,68 @@ async def test_the_whole_entity_set_appears_with_the_right_values(
     assert state_ending("pump_failure") == "on"
 
 
+async def test_a_pump_run_fires_an_event(hass, upstream, free_port):
+    """A run is a discrete occurrence, not a state.
+
+    Automations should be able to trigger on "the pump ran" rather than watch a
+    sensor and infer it from a value changing.
+    """
+    await _setup(hass, upstream, free_port)
+    body = (Path(__file__).parent / "fixtures" / "bbs_json_pump_run.txt").read_bytes()
+
+    async with ClientSession() as session:
+        async with session.post(f"http://127.0.0.1:{free_port}/bbs_json", data=body):
+            pass
+    await hass.async_block_till_done()
+
+    events = hass.states.async_all("event")
+    assert len(events) == 1
+    assert events[0].attributes["event_type"] == "primary"
+    assert events[0].attributes["duration_seconds"] == 8.2
+    assert events[0].attributes["current_milliamps"] == 2800
+
+
+async def test_a_run_after_the_device_is_known_also_fires(hass, upstream, free_port):
+    """The live path, as opposed to a run that arrives before the entity exists.
+
+    Here the device is already known from an earlier message, so the event
+    entity is listening when the run comes in.
+    """
+    await _setup(hass, upstream, free_port)
+    fixtures = Path(__file__).parent / "fixtures"
+
+    async with ClientSession() as session:
+        for name in ("bbs_json_plain_battery.txt", "bbs_json_pump_run.txt"):
+            async with session.post(
+                f"http://127.0.0.1:{free_port}/bbs_json",
+                data=(fixtures / name).read_bytes(),
+            ):
+                pass
+            await hass.async_block_till_done()
+
+    events = hass.states.async_all("event")
+    assert len(events) == 1
+    assert events[0].attributes["event_type"] == "primary"
+    assert events[0].attributes["duration_seconds"] == 8.2
+
+
+async def test_a_message_without_a_run_fires_no_event(hass, upstream, free_port):
+    """Battery and alarm messages must not look like pump runs."""
+    await _setup(hass, upstream, free_port)
+    body = (
+        Path(__file__).parent / "fixtures" / "bbs_json_plain_battery.txt"
+    ).read_bytes()
+
+    async with ClientSession() as session:
+        async with session.post(f"http://127.0.0.1:{free_port}/bbs_json", data=body):
+            pass
+    await hass.async_block_till_done()
+
+    events = hass.states.async_all("event")
+    assert len(events) == 1  # the entity exists...
+    assert events[0].state in (None, "unknown")  # ...but has never fired
+
+
 async def test_unloading_releases_the_port(hass, upstream, free_port):
     """A reconfigure or reload must not leave the port held."""
     entry = await _setup(hass, upstream, free_port)
