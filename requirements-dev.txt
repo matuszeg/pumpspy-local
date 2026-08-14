@@ -1,0 +1,4 @@
+# Pulls in Home Assistant, pytest, pytest-asyncio and aiohttp at versions that
+# match a specific HA release. Pinned deliberately: this package tracks HA, so an
+# unpinned upgrade can change the test environment underneath you.
+pytest-homeassistant-custom-component==0.13.355

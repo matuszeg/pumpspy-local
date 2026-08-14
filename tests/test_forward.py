@@ -4,38 +4,9 @@ The device's traffic reaches the vendor through us. Anything we change here
 is a change the vendor sees, so these tests pin the relay down hard.
 """
 
-import pytest
-import pytest_asyncio
-from aiohttp import ClientSession, web
-from aiohttp.test_utils import TestServer
+from aiohttp import ClientSession
 
 from custom_components.pumpspy_local.core.forward import ProxyRequest, forward
-
-
-@pytest_asyncio.fixture
-async def upstream():
-    """A stand-in vendor server that records what it was sent.
-
-    ``server.reply`` controls what it answers with.
-    """
-    received = {}
-    reply = {"status": 200, "body": b"ok"}
-
-    async def handler(request):
-        received["method"] = request.method
-        received["path"] = request.path
-        received["body"] = await request.read()
-        received["headers"] = dict(request.headers)
-        return web.Response(status=reply["status"], body=reply["body"])
-
-    app = web.Application()
-    app.router.add_route("*", "/{tail:.*}", handler)
-    server = TestServer(app)
-    await server.start_server()
-    server.received = received
-    server.reply = reply
-    yield server
-    await server.close()
 
 
 async def test_forward_relays_method_path_and_body_unmodified(upstream):
