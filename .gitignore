@@ -29,6 +29,9 @@ captures/
 firmware/
 *.bin
 
+# Local working notes — never commit
+CLAUDE.md
+
 # OS / editor
 .DS_Store
 Thumbs.db
