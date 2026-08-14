@@ -40,6 +40,12 @@ _HOP_BY_HOP = {
     "upgrade",
 }
 
+# The device sends a stale "Content-Length: 148" on GETs and then no body at all.
+# Waiting for that body wedges the request until the device gives up, and it polls
+# /new_firmware every ~13 seconds, so never read a body on a method that cannot
+# carry one. Observed in real captures.
+_BODYLESS_METHODS = {"GET", "HEAD", "DELETE", "OPTIONS", "TRACE"}
+
 CONFIG_SCHEMA = vol.Schema(
     {
         DOMAIN: vol.Schema(
@@ -72,7 +78,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 for name, value in request.headers.items()
                 if name.lower() not in _HOP_BY_HOP
             },
-            body=await request.read(),
+            body=b"" if request.method in _BODYLESS_METHODS else await request.read(),
         )
         _LOGGER.debug("device request: %s %s", proxied.method, proxied.path)
 
@@ -86,6 +92,8 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", port).start()
+    # Kept so the listener can be shut down without stopping Home Assistant.
+    hass.data[DOMAIN] = runner
     _LOGGER.info("listening on :%s, forwarding to %s", port, upstream)
 
     async def _shutdown(_: Event) -> None:

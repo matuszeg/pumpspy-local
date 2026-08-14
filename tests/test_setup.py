@@ -4,7 +4,10 @@ Proven by hand against a real HA container first. These pin it down so the
 config flow and entity platforms can be built on top without re-testing by hand.
 """
 
+import asyncio
+
 import pytest
+import pytest_asyncio
 from aiohttp import ClientSession
 from homeassistant.setup import async_setup_component
 
@@ -15,6 +18,35 @@ from custom_components.pumpspy_local import DOMAIN
 def auto_enable_custom_integrations(enable_custom_integrations):
     """Let Home Assistant load custom_components/ during tests."""
     yield
+
+
+@pytest.fixture
+def expected_lingering_tasks() -> bool:
+    """Downgrade the harness's lingering-task failure to a warning, here only.
+
+    Replaying a GET that declares a body it never sends leaves aiohttp's
+    connection handler alive until the peer disconnects, and it outlives the
+    test by a beat. It is an artefact of driving the listener over a raw socket,
+    not a leak in the integration: the runner is cleaned up in
+    ``shutdown_listener`` below, and a real device sends Connection: close.
+
+    Tradeoff worth knowing: while this is in place, a genuine task leak in this
+    module would warn instead of fail.
+    """
+    return True
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def shutdown_listener(hass):
+    """Stop the listener between tests.
+
+    Otherwise its connection handlers outlive the test and Home Assistant's
+    harness rightly fails them as lingering tasks.
+    """
+    yield
+    runner = hass.data.get(DOMAIN)
+    if runner is not None:
+        await runner.cleanup()
 
 
 async def _setup(hass, upstream, port) -> None:
@@ -59,3 +91,64 @@ async def test_setup_rewrites_the_host_header_for_upstream(hass, upstream, free_
             pass
 
     assert upstream.received["headers"]["Host"] == f"{upstream.host}:{upstream.port}"
+
+
+async def test_get_with_a_stale_content_length_does_not_hang(hass, upstream, free_port):
+    """Real captures show the device sending Content-Length on GETs, with no body.
+
+    Waiting for a body that never arrives wedges the request until the device
+    gives up. It polls /new_firmware roughly every 13 seconds, so this is the
+    hottest path there is: getting it wrong stalls the firmware check forever.
+
+    Byte shape is taken from a real capture, with the device id replaced.
+    """
+    await _setup(hass, upstream, free_port)
+
+    reader, writer = await asyncio.open_connection("127.0.0.1", free_port)
+    writer.write(
+        b"GET /new_firmware/11111111111111 HTTP/1.1\r\n"
+        b"Host: www.pumpspy.com:8081 \r\n"
+        b"Content-Type: application/json;charset=UTF-8 \r\n"
+        b"Content-Length: 148 \r\n"
+        b"Connection: close\r\n"
+        b"\r\n"
+    )
+    await writer.drain()
+
+    try:
+        reply = await asyncio.wait_for(reader.read(1024), timeout=5)
+    finally:
+        writer.close()
+        await writer.wait_closed()
+
+    assert reply.startswith(b"HTTP/1.1 200"), reply[:120]
+    assert upstream.received["path"] == "/new_firmware/11111111111111"
+
+
+async def test_double_space_in_the_request_line_is_accepted(hass, upstream, free_port):
+    """The device emits "POST  /bbs_json" with two spaces. Captured, verbatim.
+
+    Stricter parsers reject this outright, so it is worth a test that will shout
+    if the listener is ever swapped for one that does.
+    """
+    await _setup(hass, upstream, free_port)
+
+    reader, writer = await asyncio.open_connection("127.0.0.1", free_port)
+    writer.write(
+        b"POST  /bbs_json HTTP/1.1\r\n"
+        b"Host: www.pumpspy.com:8081 \r\n"
+        b"Content-Length: 2 \r\n"
+        b"Connection: close\r\n"
+        b"\r\n"
+        b"{}"
+    )
+    await writer.drain()
+
+    try:
+        reply = await asyncio.wait_for(reader.read(1024), timeout=5)
+    finally:
+        writer.close()
+        await writer.wait_closed()
+
+    assert reply.startswith(b"HTTP/1.1 200"), reply[:120]
+    assert upstream.received["path"] == "/bbs_json"

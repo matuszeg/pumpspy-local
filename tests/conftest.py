@@ -30,7 +30,12 @@ async def upstream(socket_enabled):
         received["path"] = request.path
         received["body"] = await request.read()
         received["headers"] = dict(request.headers)
-        return web.Response(status=reply["status"], body=reply["body"])
+        response = web.Response(status=reply["status"], body=reply["body"])
+        # The proxy correctly strips Connection: close as a hop-by-hop header, so
+        # its upstream connection would otherwise stay keep-alive and leave this
+        # server's handler task alive past the end of the test.
+        response.force_close()
+        return response
 
     app = web.Application()
     app.router.add_route("*", "/{tail:.*}", handler)
