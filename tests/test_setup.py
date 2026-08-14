@@ -5,6 +5,7 @@ config flow and entity platforms can be built on top without re-testing by hand.
 """
 
 import asyncio
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
@@ -44,9 +45,9 @@ async def shutdown_listener(hass):
     harness rightly fails them as lingering tasks.
     """
     yield
-    runner = hass.data.get(DOMAIN)
-    if runner is not None:
-        await runner.cleanup()
+    runtime = hass.data.get(DOMAIN)
+    if runtime is not None and runtime.runner is not None:
+        await runtime.runner.cleanup()
 
 
 async def _setup(hass, upstream, port) -> None:
@@ -152,3 +153,51 @@ async def test_double_space_in_the_request_line_is_accepted(hass, upstream, free
 
     assert reply.startswith(b"HTTP/1.1 200"), reply[:120]
     assert upstream.received["path"] == "/bbs_json"
+
+
+async def test_a_posted_reading_becomes_device_state(hass, upstream, free_port):
+    """The end-to-end path: bytes on the wire become something an entity can read."""
+    await _setup(hass, upstream, free_port)
+    body = (Path(__file__).parent / "fixtures" / "bbs_json_plain_battery.txt").read_bytes()
+
+    async with ClientSession() as session:
+        async with session.post(f"http://127.0.0.1:{free_port}/bbs_json", data=body):
+            pass
+    await hass.async_block_till_done()
+
+    device = hass.data[DOMAIN].devices["11111111111111"]
+    assert device.battery_volts == 13.324
+
+
+async def test_a_parse_failure_does_not_break_forwarding(hass, upstream, free_port):
+    """Parsing runs beside delivery to the vendor. It must never cost a delivery."""
+    await _setup(hass, upstream, free_port)
+
+    async with ClientSession() as session:
+        async with session.post(
+            f"http://127.0.0.1:{free_port}/bbs_json", data=b"utter nonsense"
+        ) as response:
+            assert response.status == 200
+    await hass.async_block_till_done()
+
+    assert upstream.received["body"] == b"utter nonsense"
+    assert hass.data[DOMAIN].devices == {}
+
+
+async def test_a_reading_creates_a_battery_voltage_entity(hass, upstream, free_port):
+    """Devices are not configured; they are adopted when they first report."""
+    await _setup(hass, upstream, free_port)
+    body = (Path(__file__).parent / "fixtures" / "bbs_json_plain_battery.txt").read_bytes()
+
+    async with ClientSession() as session:
+        async with session.post(f"http://127.0.0.1:{free_port}/bbs_json", data=body):
+            pass
+    await hass.async_block_till_done()
+
+    sensors = [
+        state
+        for state in hass.states.async_all("sensor")
+        if "battery_voltage" in state.entity_id
+    ]
+    assert len(sensors) == 1
+    assert sensors[0].state == "13.324"
