@@ -83,3 +83,37 @@ async def test_only_one_instance_can_be_configured(hass, upstream, free_port):
 
     assert second["type"] == FlowResultType.ABORT
     assert second["reason"] == "single_instance_allowed"
+
+
+async def test_the_form_offers_a_way_to_locate_the_vendor(hass, socket_enabled):
+    """The redirect breaks ordinary name lookup for this host as well.
+
+    Without a resolver of its own, Home Assistant asks the poisoned resolver
+    where the vendor is and is told "you are". These two fields are the way out
+    of that, so the dialog has to actually offer them.
+    """
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+
+    fields = {str(key) for key in result["data_schema"].schema}
+
+    assert {"nameserver", "upstream_ip"} <= fields
+
+
+async def test_the_vendor_can_be_pinned_to_an_address(hass, upstream, free_port):
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            "port": free_port,
+            "upstream": f"http://{upstream.host}:{upstream.port}",
+            "upstream_ip": "206.80.104.221",
+        },
+    )
+    await hass.async_block_till_done()
+
+    assert result["data"]["upstream_ip"] == "206.80.104.221"

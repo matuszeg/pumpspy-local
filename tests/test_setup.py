@@ -7,6 +7,7 @@ config flow and entity platforms can be built on top without re-testing by hand.
 import asyncio
 import socket
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import pytest_asyncio
@@ -564,3 +565,77 @@ async def test_unloading_releases_the_port(hass, upstream, free_port):
     with socket.socket() as probe:
         probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         probe.bind(("0.0.0.0", free_port))  # raises if the listener still holds it
+
+
+# Nothing listens on port 1, so forwarding there fails immediately and
+# deterministically -- no waiting on a timeout.
+DEAD_UPSTREAM = "http://127.0.0.1:1"
+
+
+async def _setup_pointing_at(hass, url, port) -> MockConfigEntry:
+    entry = MockConfigEntry(domain=DOMAIN, data={"port": port, "upstream": url})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    return entry
+
+
+async def test_the_device_is_told_when_the_vendor_cannot_be_reached(hass, free_port):
+    """Never a synthetic 200.
+
+    A fabricated success tells the device its event was delivered, and the
+    device then has no reason to retry -- the event is lost for good.
+    """
+    await _setup_pointing_at(hass, DEAD_UPSTREAM, free_port)
+
+    async with ClientSession() as session:
+        async with session.post(
+            f"http://127.0.0.1:{free_port}/bbs_json", data=b"{}"
+        ) as response:
+            assert response.status == 502
+
+
+async def test_telemetry_still_lands_locally_when_the_vendor_is_unreachable(
+    hass, free_port
+):
+    """Local monitoring is the whole point; it cannot depend on the vendor.
+
+    The device's message is in our hands either way, and the vendor being down
+    -- or the upstream being misconfigured -- is no reason to throw it away.
+    """
+    entry = await _setup_pointing_at(hass, DEAD_UPSTREAM, free_port)
+    body = (Path(__file__).parent / "fixtures" / "bbs_json_plain_battery.txt").read_bytes()
+
+    async with ClientSession() as session:
+        async with session.post(f"http://127.0.0.1:{free_port}/bbs_json", data=body):
+            pass
+    await hass.async_block_till_done()
+
+    device = runtime_of(hass, entry).devices["11111111111111"]
+    assert device.battery_volts == 13.324
+
+
+async def test_a_redirect_that_points_back_at_us_is_refused(hass, free_port, caplog):
+    """The failure this whole mechanism exists to prevent.
+
+    With the rewrite in place, the vendor's name answers with the Home Assistant
+    host for anyone who asks -- including Home Assistant. Forwarding to that
+    answer is forwarding into our own listener, over and over.
+    """
+
+    async def resolves_to_us(hostname: str) -> list[str]:
+        return ["192.168.7.57"]
+
+    with patch(
+        "custom_components.pumpspy_local.aiodns_resolver",
+        return_value=resolves_to_us,
+    ):
+        await _setup_pointing_at(hass, "http://www.pumpspy.com:8081", free_port)
+
+        async with ClientSession() as session:
+            async with session.post(
+                f"http://127.0.0.1:{free_port}/bbs_json", data=b"{}"
+            ) as response:
+                assert response.status == 502
+
+    assert "192.168.7.57" in caplog.text

@@ -9,12 +9,15 @@ from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.helpers import selector
 
 from .core.gallons import DEFAULT_FLOW_RATE
+from .core.upstream import DEFAULT_NAMESERVER
 from .const import (
     CONF_CHECK_INTERVAL_HOURS,
     CONF_FIRMWARE_POLICY,
     CONF_FLOW_RATE,
+    CONF_NAMESERVER,
     CONF_PORT,
     CONF_UPSTREAM,
+    CONF_UPSTREAM_IP,
     DEFAULT_CHECK_INTERVAL_HOURS,
     DEFAULT_FIRMWARE_POLICY,
     DEFAULT_PORT,
@@ -37,6 +40,15 @@ SCHEMA = vol.Schema(
         vol.Required(CONF_UPSTREAM, default=DEFAULT_UPSTREAM): selector.TextSelector(
             selector.TextSelectorConfig(type=selector.TextSelectorType.URL)
         ),
+        # How to find the vendor once the redirect is in place. The redirect
+        # answers for this host too, so looking the name up the ordinary way
+        # returns Home Assistant itself. A resolver that is not carrying the
+        # redirect fixes that; an address pins it outright, for networks where
+        # outbound DNS is blocked or the resolver cannot be trusted either.
+        vol.Required(
+            CONF_NAMESERVER, default=DEFAULT_NAMESERVER
+        ): selector.TextSelector(),
+        vol.Optional(CONF_UPSTREAM_IP, default=""): selector.TextSelector(),
         vol.Required(
             CONF_FLOW_RATE, default=DEFAULT_FLOW_RATE
         ): selector.NumberSelector(

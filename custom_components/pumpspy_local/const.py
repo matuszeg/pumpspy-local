@@ -11,6 +11,12 @@ CONF_FLOW_RATE = "flow_rate"
 CONF_FIRMWARE_POLICY = "firmware_policy"
 CONF_CHECK_INTERVAL_HOURS = "firmware_check_hours"
 
+# The redirect that sends the device here answers for this host too, so the
+# vendor has to be located some other way: a resolver the redirect is not
+# installed in, or an address given outright.
+CONF_NAMESERVER = "nameserver"
+CONF_UPSTREAM_IP = "upstream_ip"
+
 # The endpoint the device polls every ~13 seconds.
 FIRMWARE_PATH = "/new_firmware"
 

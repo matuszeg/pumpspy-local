@@ -10,7 +10,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import timedelta
 
-from aiohttp import web
+from aiohttp import ClientError, web
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
@@ -23,8 +23,10 @@ from .const import (
     CONF_CHECK_INTERVAL_HOURS,
     CONF_FIRMWARE_POLICY,
     CONF_FLOW_RATE,
+    CONF_NAMESERVER,
     CONF_PORT,
     CONF_UPSTREAM,
+    CONF_UPSTREAM_IP,
     DEFAULT_CHECK_INTERVAL_HOURS,
     DEFAULT_FIRMWARE_POLICY,
     DOMAIN,
@@ -35,11 +37,17 @@ from .const import (
     signal_device_update,
     signal_pump_run,
 )
-from .core.forward import ProxyRequest, forward
+from .core.forward import ProxyRequest, ProxyResponse, forward
 from .core.firmware import FirmwareChecker, Reply, Verdict, classify
 from .core.gallons import DEFAULT_FLOW_RATE
 from .core.parser import BbsReading, Ping, parse_request
 from .core.state import DeviceState
+from .core.upstream import (
+    DEFAULT_NAMESERVER,
+    UpstreamAddress,
+    UpstreamUnavailable,
+    aiodns_resolver,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -135,6 +143,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         CONF_CHECK_INTERVAL_HOURS, DEFAULT_CHECK_INTERVAL_HOURS
     )
 
+    # The redirect that brings the device here is a fact about DNS, not about
+    # the device, so this host sees it too. Locate the vendor out of band.
+    upstream_address = UpstreamAddress(
+        url=upstream,
+        resolve=aiodns_resolver(
+            [entry.data.get(CONF_NAMESERVER) or DEFAULT_NAMESERVER]
+        ),
+        override=entry.data.get(CONF_UPSTREAM_IP) or None,
+    )
+
     session = async_get_clientsession(hass)
     store: Store = Store(hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}")
     runtime = PumpspyRuntime(
@@ -182,6 +200,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if touched:
             runtime.request_save()
 
+    async def _relay(proxied: ProxyRequest) -> ProxyResponse | None:
+        """Deliver one request to the vendor, or None if it could not be sent.
+
+        Both failures are survivable and neither is worth an exception escaping
+        into the listener: the device retries, and what we learned from the
+        message is ours either way.
+        """
+        try:
+            target = await upstream_address.target(dt_util.utcnow())
+            return await forward(session, target, proxied)
+        except UpstreamUnavailable as err:
+            # A configuration problem, not a passing outage -- say so loudly.
+            _LOGGER.error("not forwarding: %s", err)
+        except ClientError as err:
+            _LOGGER.warning("could not reach the vendor: %s", err)
+        return None
+
     async def _handle_firmware_check(proxied: ProxyRequest) -> web.Response:
         """Answer the device's firmware poll, asking upstream only when due.
 
@@ -194,7 +229,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         checker = runtime.firmware_for(device_id)
 
         if checker.should_query_upstream(dt_util.utcnow()):
-            response = await forward(session, upstream, proxied)
+            response = await _relay(proxied)
+            if response is None:
+                # Answer from the last known-good reply rather than making the
+                # vendor's bad day the device's problem. last_checked is left
+                # alone, so the next poll tries again.
+                cached = checker.reply_for_device()
+                if cached is None:
+                    return web.Response(status=502)
+                return web.Response(status=cached.status, body=cached.body)
+
             reply = Reply(status=response.status, body=response.body)
             verdict = classify(reply.status, reply.body)
             served = checker.record_upstream(
@@ -228,15 +272,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if proxied.path.startswith(FIRMWARE_PATH):
             return await _handle_firmware_check(proxied)
 
-        response = await forward(session, upstream, proxied)
-        _LOGGER.debug("upstream replied %s", response.status)
+        response = await _relay(proxied)
 
         # Parsed after forwarding, so the vendor's delivery is never delayed or
-        # put at risk by it. parse_request never raises, and this is a few
-        # microseconds of pure CPU on a ~100 byte body, so it stays inline
+        # put at risk by it -- but always parsed, including when the delivery
+        # failed. Local monitoring that stops when the vendor is unreachable
+        # would be missing the point. parse_request never raises, and this is a
+        # few microseconds of pure CPU on a ~100 byte body, so it stays inline
         # rather than becoming a task that would only add scheduling overhead.
         _record(runtime, parse_request(proxied.path, proxied.body))
 
+        if response is None:
+            # Not a synthetic 200: telling the device its event was delivered
+            # when it was not is how an event gets lost for good.
+            return web.Response(status=502)
+
+        _LOGGER.debug("upstream replied %s", response.status)
         return web.Response(status=response.status, body=response.body)
 
     app = web.Application()
