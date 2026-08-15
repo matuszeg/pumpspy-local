@@ -1,0 +1,39 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "pumpspy-local",
+        "description": "Point your DNS rewrite for www.pumpspy.com at this machine, then set the port the device reports to and where its traffic should be forwarded.",
+        "data": {
+          "port": "Listen port",
+          "upstream": "Forward to",
+          "nameserver": "Look up the vendor using",
+          "upstream_ip": "Vendor address (optional)",
+          "flow_rate": "Gallons per second",
+          "firmware_policy": "Firmware updates",
+          "firmware_check_hours": "Check for firmware every (hours)"
+        },
+        "data_description": {
+          "port": "The port the device posts to. Leave at 8081 unless you know otherwise.",
+          "upstream": "Where the device's traffic is relayed so the vendor app keeps working.",
+          "nameserver": "Your DNS rewrite answers for this machine too, so looking up the vendor normally points Home Assistant back at itself. This resolver is asked instead, and must be one the rewrite is not installed in.",
+          "upstream_ip": "Leave blank unless the lookup above cannot work -- outbound DNS blocked, for example. Set it and the vendor is contacted at this address directly, with no lookup at all.",
+          "flow_rate": "Used to estimate gallons from how long a pump ran. The device does not report volume, so this is an estimate; 1.0 matches the vendor's own figure.",
+          "firmware_policy": "Observe only watches and tells you. Quarantine holds an update back until you approve it, which is the one place this integration changes what your device receives.",
+          "firmware_check_hours": "Your device asks about every 13 seconds. This is how often that question is actually passed on to the vendor; the device still gets an answer every time."
+        }
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "pumpspy-local is already set up. One listener handles every device that reports to it."
+    }
+  },
+  "selector": {
+    "firmware_policy": {
+      "options": {
+        "observe": "Observe and alert",
+        "quarantine": "Hold for my approval"
+      }
+    }
+  }
+}
