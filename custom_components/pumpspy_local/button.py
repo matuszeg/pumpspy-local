@@ -13,7 +13,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, SIGNAL_NEW_DEVICE, signal_device_update
+from .const import DOMAIN, SIGNAL_FIRMWARE, SIGNAL_NEW_DEVICE, signal_device_update
 from .core.state import DeviceState
 from .entity import PumpspyEntity
 
@@ -33,7 +33,12 @@ async def async_setup_entry(
 
     @callback
     def _add(device: DeviceState) -> None:
-        async_add_entities([ClearPumpFailure(device, DESCRIPTION, runtime)])
+        async_add_entities(
+            [
+                ClearPumpFailure(device, DESCRIPTION, runtime),
+                ApproveFirmwareUpdate(device, APPROVE_DESCRIPTION, runtime),
+            ]
+        )
 
     for device in runtime.devices.values():
         _add(device)
@@ -56,3 +61,25 @@ class ClearPumpFailure(PumpspyEntity, ButtonEntity):
         async_dispatcher_send(
             self.hass, signal_device_update(self._device.device_id)
         )
+
+
+APPROVE_DESCRIPTION = ButtonEntityDescription(
+    key="approve_firmware_update",
+    name="Approve firmware update",
+)
+
+
+class ApproveFirmwareUpdate(PumpspyEntity, ButtonEntity):
+    """Releases a held firmware update.
+
+    Only meaningful in quarantine mode; in observe mode nothing is ever held and
+    pressing this does nothing.
+    """
+
+    def __init__(self, device: DeviceState, description, runtime) -> None:
+        super().__init__(device, description)
+        self._runtime = runtime
+
+    async def async_press(self) -> None:
+        self._runtime.firmware_for(self._device.device_id).approve()
+        async_dispatcher_send(self.hass, SIGNAL_FIRMWARE, self._device.device_id)

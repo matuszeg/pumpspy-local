@@ -10,12 +10,18 @@ from homeassistant.helpers import selector
 
 from .core.gallons import DEFAULT_FLOW_RATE
 from .const import (
+    CONF_CHECK_INTERVAL_HOURS,
+    CONF_FIRMWARE_POLICY,
     CONF_FLOW_RATE,
     CONF_PORT,
     CONF_UPSTREAM,
+    DEFAULT_CHECK_INTERVAL_HOURS,
+    DEFAULT_FIRMWARE_POLICY,
     DEFAULT_PORT,
     DEFAULT_UPSTREAM,
     DOMAIN,
+    POLICY_OBSERVE,
+    POLICY_QUARANTINE,
 )
 
 # Selectors rather than cv.port / cv.url on purpose. The frontend fetches this
@@ -38,6 +44,23 @@ SCHEMA = vol.Schema(
                 min=0.1, max=100, step=0.1, mode=selector.NumberSelectorMode.BOX
             )
         ),
+        # Observe by default. Quarantine alters what the device receives, which
+        # is the one place this project does that, so it is opt-in.
+        vol.Required(
+            CONF_FIRMWARE_POLICY, default=DEFAULT_FIRMWARE_POLICY
+        ): selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=[POLICY_OBSERVE, POLICY_QUARANTINE],
+                translation_key=CONF_FIRMWARE_POLICY,
+            )
+        ),
+        vol.Required(
+            CONF_CHECK_INTERVAL_HOURS, default=DEFAULT_CHECK_INTERVAL_HOURS
+        ): selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=1, max=168, mode=selector.NumberSelectorMode.BOX
+            )
+        ),
     }
 )
 
@@ -56,7 +79,13 @@ class PumpspyLocalConfigFlow(ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             # NumberSelector hands back a float; the port has to be an int.
-            data = {**user_input, CONF_PORT: int(user_input[CONF_PORT])}
+            data = {
+                **user_input,
+                CONF_PORT: int(user_input[CONF_PORT]),
+                CONF_CHECK_INTERVAL_HOURS: int(
+                    user_input[CONF_CHECK_INTERVAL_HOURS]
+                ),
+            }
             return self.async_create_entry(title="pumpspy-local", data=data)
 
         return self.async_show_form(step_id="user", data_schema=SCHEMA)

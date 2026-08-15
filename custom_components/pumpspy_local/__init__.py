@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import timedelta
 
 from aiohttp import web
 from homeassistant.config_entries import ConfigEntry
@@ -19,15 +20,23 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CONF_CHECK_INTERVAL_HOURS,
+    CONF_FIRMWARE_POLICY,
     CONF_FLOW_RATE,
     CONF_PORT,
     CONF_UPSTREAM,
+    DEFAULT_CHECK_INTERVAL_HOURS,
+    DEFAULT_FIRMWARE_POLICY,
     DOMAIN,
+    FIRMWARE_PATH,
+    POLICY_QUARANTINE,
+    SIGNAL_FIRMWARE,
     SIGNAL_NEW_DEVICE,
     signal_device_update,
     signal_pump_run,
 )
 from .core.forward import ProxyRequest, forward
+from .core.firmware import FirmwareChecker, Reply, Verdict, classify
 from .core.gallons import DEFAULT_FLOW_RATE
 from .core.parser import BbsReading, Ping, parse_request
 from .core.state import DeviceState
@@ -77,6 +86,16 @@ class PumpspyRuntime:
     runner: web.AppRunner | None = None
     devices: dict[str, DeviceState] = field(default_factory=dict)
     flow_rate: float = DEFAULT_FLOW_RATE
+    check_interval: timedelta = timedelta(hours=DEFAULT_CHECK_INTERVAL_HOURS)
+    # Keyed by device id: the endpoint is /new_firmware/<id>, so two devices
+    # could legitimately be offered different firmware and must not share a
+    # cached reply.
+    firmware: dict[str, FirmwareChecker] = field(default_factory=dict)
+
+    def firmware_for(self, device_id: str) -> FirmwareChecker:
+        if device_id not in self.firmware:
+            self.firmware[device_id] = FirmwareChecker(interval=self.check_interval)
+        return self.firmware[device_id]
 
     def as_stored(self) -> dict:
         return {
@@ -108,10 +127,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     port: int = entry.data[CONF_PORT]
     upstream: str = entry.data[CONF_UPSTREAM].rstrip("/")
     flow_rate: float = entry.data.get(CONF_FLOW_RATE, DEFAULT_FLOW_RATE)
+    quarantine: bool = (
+        entry.data.get(CONF_FIRMWARE_POLICY, DEFAULT_FIRMWARE_POLICY)
+        == POLICY_QUARANTINE
+    )
+    check_hours: int = entry.data.get(
+        CONF_CHECK_INTERVAL_HOURS, DEFAULT_CHECK_INTERVAL_HOURS
+    )
 
     session = async_get_clientsession(hass)
     store: Store = Store(hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}")
-    runtime = PumpspyRuntime(store=store, flow_rate=flow_rate)
+    runtime = PumpspyRuntime(
+        store=store,
+        flow_rate=flow_rate,
+        check_interval=timedelta(hours=check_hours),
+    )
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime
 
     # Restore what the device only tells us when it changes. Without this a
@@ -152,6 +182,36 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if touched:
             runtime.request_save()
 
+    async def _handle_firmware_check(proxied: ProxyRequest) -> web.Response:
+        """Answer the device's firmware poll, asking upstream only when due.
+
+        The device asks every ~13 seconds; from its point of view nothing here
+        changes, it just gets the same answer without the vendor being asked
+        every time.
+        """
+        # /new_firmware/<device id>
+        device_id = proxied.path.rsplit("/", 1)[-1]
+        checker = runtime.firmware_for(device_id)
+
+        if checker.should_query_upstream(dt_util.utcnow()):
+            response = await forward(session, upstream, proxied)
+            reply = Reply(status=response.status, body=response.body)
+            verdict = classify(reply.status, reply.body)
+            served = checker.record_upstream(
+                dt_util.utcnow(), reply, quarantine=quarantine
+            )
+            if verdict is Verdict.UPDATE_OFFERED:
+                _LOGGER.warning(
+                    "vendor is offering a firmware update%s",
+                    " -- held, awaiting approval" if checker.held else "",
+                )
+                async_dispatcher_send(hass, SIGNAL_FIRMWARE, device_id)
+        else:
+            served = checker.reply_for_device()
+            _LOGGER.debug("firmware check answered from cache")
+
+        return web.Response(status=served.status, body=served.body)
+
     async def handle(request: web.Request) -> web.Response:
         proxied = ProxyRequest(
             method=request.method,
@@ -164,6 +224,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             body=b"" if request.method in _BODYLESS_METHODS else await request.read(),
         )
         _LOGGER.debug("device request: %s %s", proxied.method, proxied.path)
+
+        if proxied.path.startswith(FIRMWARE_PATH):
+            return await _handle_firmware_check(proxied)
 
         response = await forward(session, upstream, proxied)
         _LOGGER.debug("upstream replied %s", response.status)

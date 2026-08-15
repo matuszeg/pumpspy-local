@@ -15,7 +15,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, SIGNAL_NEW_DEVICE
+from .const import DOMAIN, SIGNAL_FIRMWARE, SIGNAL_NEW_DEVICE
 from .core.state import DeviceState
 from .entity import PumpspyEntity
 
@@ -61,10 +61,12 @@ async def async_setup_entry(
 
     @callback
     def _add(device: DeviceState) -> None:
-        async_add_entities(
+        entities: list[PumpspyEntity] = [
             PumpspyBinarySensor(device, description)
             for description in BINARY_SENSORS
-        )
+        ]
+        entities.append(FirmwareUpdate(device, FIRMWARE_DESCRIPTION, runtime))
+        async_add_entities(entities)
 
     for device in runtime.devices.values():
         _add(device)
@@ -80,3 +82,43 @@ class PumpspyBinarySensor(PumpspyEntity, BinarySensorEntity):
     @property
     def is_on(self) -> bool | None:
         return self.entity_description.value_fn(self._device)
+
+
+FIRMWARE_DESCRIPTION = BinarySensorEntityDescription(
+    key="firmware_update",
+    name="Firmware update",
+    device_class=BinarySensorDeviceClass.UPDATE,
+)
+
+
+class FirmwareUpdate(PumpspyEntity, BinarySensorEntity):
+    """Whether the vendor is currently offering this device an update.
+
+    Reads from the firmware checker rather than device state: this is something
+    we observed about the vendor's answer, not something the device told us.
+    """
+
+    def __init__(self, device: DeviceState, description, runtime) -> None:
+        super().__init__(device, description)
+        self._runtime = runtime
+
+    @property
+    def is_on(self) -> bool:
+        return self._runtime.firmware_for(self._device.device_id).update_offered
+
+    @property
+    def extra_state_attributes(self) -> dict[str, bool]:
+        checker = self._runtime.firmware_for(self._device.device_id)
+        return {"held_for_approval": checker.held is not None}
+
+    async def async_added_to_hass(self) -> None:
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass, SIGNAL_FIRMWARE, self._handle_firmware
+            )
+        )
+
+    @callback
+    def _handle_firmware(self, device_id: str) -> None:
+        if device_id == self._device.device_id:
+            self.async_write_ha_state()

@@ -127,6 +127,38 @@ def test_approving_a_held_update_lets_it_through_next_time():
     assert checker.should_query_upstream(NOON + timedelta(days=30)) is True
 
 
+def test_an_offered_update_is_remembered_even_when_not_quarantining():
+    """Observe mode does not withhold anything, but must still say so."""
+    checker = FirmwareChecker()
+    checker.record_upstream(NOON, NO_UPDATE, quarantine=False)
+
+    checker.record_upstream(NOON + timedelta(hours=25), AN_UPDATE, quarantine=False)
+
+    assert checker.update_offered is True
+
+
+def test_the_offer_is_forgotten_once_the_vendor_stops_offering():
+    """Otherwise the alert would stay lit forever after a withdrawn update."""
+    checker = FirmwareChecker()
+    checker.record_upstream(NOON, AN_UPDATE, quarantine=False)
+
+    checker.record_upstream(NOON + timedelta(hours=25), NO_UPDATE, quarantine=False)
+
+    assert checker.update_offered is False
+
+
+def test_an_upstream_error_does_not_clear_a_standing_offer():
+    """A bad gateway is not evidence the update went away."""
+    checker = FirmwareChecker()
+    checker.record_upstream(NOON, AN_UPDATE, quarantine=False)
+
+    checker.record_upstream(
+        NOON + timedelta(hours=25), Reply(502, b"Bad Gateway"), quarantine=False
+    )
+
+    assert checker.update_offered is True
+
+
 def test_quarantine_cannot_engage_without_a_known_no_update_reply():
     """With no baseline there is nothing safe to answer with.
 

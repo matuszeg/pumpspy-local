@@ -8,6 +8,19 @@ MODEL = "PumpSpy / PitBoss+"
 CONF_PORT = "port"
 CONF_UPSTREAM = "upstream"
 CONF_FLOW_RATE = "flow_rate"
+CONF_FIRMWARE_POLICY = "firmware_policy"
+CONF_CHECK_INTERVAL_HOURS = "firmware_check_hours"
+
+# The endpoint the device polls every ~13 seconds.
+FIRMWARE_PATH = "/new_firmware"
+
+POLICY_OBSERVE = "observe"
+POLICY_QUARANTINE = "quarantine"
+DEFAULT_FIRMWARE_POLICY = POLICY_OBSERVE
+DEFAULT_CHECK_INTERVAL_HOURS = 24
+
+# Fired when the vendor offers an update.
+SIGNAL_FIRMWARE = f"{DOMAIN}_firmware"
 
 # The port the device reports to, and the vendor it reports to. Both are what a
 # real installation needs; a development instance must point upstream somewhere

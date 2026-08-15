@@ -84,6 +84,8 @@ class FirmwareChecker:
     cached: Reply | None = None
     last_checked: datetime | None = None
     held: Reply | None = None
+    # Whether the vendor is currently offering an update, in either mode.
+    update_offered: bool = False
 
     def should_query_upstream(self, now: datetime) -> bool:
         if self.held is not None:
@@ -104,11 +106,13 @@ class FirmwareChecker:
         verdict = classify(reply.status, reply.body)
 
         if verdict is Verdict.NO_UPDATE:
+            self.update_offered = False
             self.cached = reply
             self.last_checked = now
             return reply
 
         if verdict is Verdict.UPDATE_OFFERED:
+            self.update_offered = True
             self.last_checked = now
             # Quarantine needs a known-good reply to answer with. Without one
             # there is nothing safe to send, and inventing a shape the device
@@ -119,7 +123,8 @@ class FirmwareChecker:
             return reply
 
         # UNKNOWN: an upstream error or a shape we do not recognise. Do not
-        # cache it, and do not let it look like an update.
+        # cache it, do not let it look like an update, and leave any standing
+        # offer alone -- a bad gateway is not evidence the update went away.
         self.last_checked = now
         return reply
 

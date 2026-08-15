@@ -23,6 +23,7 @@ async def upstream(socket_enabled):
     ``server.reply`` controls what it answers with.
     """
     received = {}
+    requests: list[str] = []
     reply = {"status": 200, "body": b"ok"}
 
     async def handler(request):
@@ -30,6 +31,7 @@ async def upstream(socket_enabled):
         received["path"] = request.path
         received["body"] = await request.read()
         received["headers"] = dict(request.headers)
+        requests.append(request.path)
         response = web.Response(status=reply["status"], body=reply["body"])
         # The proxy correctly strips Connection: close as a hop-by-hop header, so
         # its upstream connection would otherwise stay keep-alive and leave this
@@ -42,6 +44,7 @@ async def upstream(socket_enabled):
     server = TestServer(app)
     await server.start_server()
     server.received = received
+    server.requests = requests
     server.reply = reply
     yield server
     await server.close()

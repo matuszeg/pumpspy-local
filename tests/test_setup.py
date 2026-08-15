@@ -484,6 +484,76 @@ async def test_the_configured_flow_rate_changes_the_estimate(
     assert gallons == "4"  # 8.2s at half a gallon per second, rounded down
 
 
+async def test_repeated_firmware_checks_do_not_all_reach_the_vendor(
+    hass, upstream, free_port
+):
+    """The device asks every ~13 seconds. One answer serves them all.
+
+    The device must still get a reply every time -- from its point of view
+    nothing has changed.
+    """
+    upstream.reply["body"] = b"[]"  # the captured "no update" reply
+    await _setup(hass, upstream, free_port)
+
+    async with ClientSession() as session:
+        for _ in range(3):
+            async with session.get(
+                f"http://127.0.0.1:{free_port}/new_firmware/11111111111111"
+            ) as response:
+                assert response.status == 200
+                assert await response.read() == b"[]"
+    await hass.async_block_till_done()
+
+    firmware_calls = [p for p in upstream.requests if p.startswith("/new_firmware")]
+    assert len(firmware_calls) == 1
+
+
+async def test_telemetry_is_never_throttled(hass, upstream, free_port):
+    """Only the firmware check is cached. Readings must always go through."""
+    await _setup(hass, upstream, free_port)
+    body = (Path(__file__).parent / "fixtures" / "bbs_json_pump_run.txt").read_bytes()
+
+    async with ClientSession() as session:
+        for _ in range(3):
+            async with session.post(
+                f"http://127.0.0.1:{free_port}/bbs_json", data=body
+            ):
+                pass
+    await hass.async_block_till_done()
+
+    assert len([p for p in upstream.requests if p == "/bbs_json"]) == 3
+
+
+async def test_an_offered_update_shows_up_in_home_assistant(
+    hass, upstream, free_port
+):
+    """Observe mode does not withhold the update, but must still say so."""
+    await _setup(hass, upstream, free_port)
+    body = (Path(__file__).parent / "fixtures" / "bbs_json_plain_battery.txt").read_bytes()
+
+    async with ClientSession() as session:
+        # The device has to be known before it can have entities.
+        async with session.post(f"http://127.0.0.1:{free_port}/bbs_json", data=body):
+            pass
+        await hass.async_block_till_done()
+
+        upstream.reply["body"] = b'[{"version": "2.1.4"}]'
+        async with session.get(
+            f"http://127.0.0.1:{free_port}/new_firmware/11111111111111"
+        ) as response:
+            # Observe mode relays it untouched.
+            assert await response.read() == b'[{"version": "2.1.4"}]'
+    await hass.async_block_till_done()
+
+    detected = [
+        state
+        for state in hass.states.async_all("binary_sensor")
+        if state.entity_id.endswith("firmware_update")
+    ]
+    assert len(detected) == 1
+    assert detected[0].state == "on"
+
+
 async def test_unloading_releases_the_port(hass, upstream, free_port):
     """A reconfigure or reload must not leave the port held."""
     entry = await _setup(hass, upstream, free_port)
