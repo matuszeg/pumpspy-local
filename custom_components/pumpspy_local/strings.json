@@ -6,11 +6,13 @@
         "description": "Point your DNS rewrite for www.pumpspy.com at this machine, then set the port the device reports to and where its traffic should be forwarded.",
         "data": {
           "port": "Listen port",
-          "upstream": "Forward to"
+          "upstream": "Forward to",
+          "flow_rate": "Gallons per second"
         },
         "data_description": {
           "port": "The port the device posts to. Leave at 8081 unless you know otherwise.",
-          "upstream": "Where the device's traffic is relayed so the vendor app keeps working."
+          "upstream": "Where the device's traffic is relayed so the vendor app keeps working.",
+          "flow_rate": "Used to estimate gallons from how long a pump ran. The device does not report volume, so this is an estimate; 1.0 matches the vendor's own figure."
         }
       }
     },

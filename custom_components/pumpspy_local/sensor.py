@@ -96,6 +96,60 @@ SENSORS: tuple[PumpspySensorDescription, ...] = (
 )
 
 
+def _totals_sensors() -> tuple[PumpspySensorDescription, ...]:
+    """Run and gallon counters, per pump.
+
+    Kept separate per pump because a backup run means the mains failed; folding
+    both into one figure would hide the thing most worth noticing.
+    """
+    sensors: list[PumpspySensorDescription] = []
+    for pump in ("primary", "backup"):
+        label = pump.capitalize()
+        sensors.extend(
+            (
+                PumpspySensorDescription(
+                    key=f"{pump}_runs_today",
+                    name=f"{label} runs today",
+                    state_class=SensorStateClass.TOTAL_INCREASING,
+                    value_fn=lambda device, p=pump: device.totals[p].runs_today,
+                ),
+                PumpspySensorDescription(
+                    key=f"{pump}_estimated_gallons_today",
+                    name=f"{label} estimated gallons today",
+                    native_unit_of_measurement="gal",
+                    state_class=SensorStateClass.TOTAL_INCREASING,
+                    value_fn=lambda device, p=pump: device.totals[p].gallons_today,
+                ),
+                PumpspySensorDescription(
+                    key=f"{pump}_runs_total",
+                    name=f"{label} runs total",
+                    state_class=SensorStateClass.TOTAL_INCREASING,
+                    value_fn=lambda device, p=pump: device.totals[p].runs_total,
+                ),
+                PumpspySensorDescription(
+                    key=f"{pump}_estimated_gallons_total",
+                    name=f"{label} estimated gallons total",
+                    native_unit_of_measurement="gal",
+                    state_class=SensorStateClass.TOTAL_INCREASING,
+                    value_fn=lambda device, p=pump: device.totals[p].gallons_total,
+                ),
+            )
+        )
+    return tuple(sensors)
+
+
+SENSORS = SENSORS + (
+    PumpspySensorDescription(
+        key="last_run_estimated_gallons",
+        # "Estimated" in the name on purpose: this is derived from run duration,
+        # not measured, and matches how the vendor's own app frames it.
+        name="Last run estimated gallons",
+        native_unit_of_measurement="gal",
+        value_fn=lambda device: device.last_run_gallons,
+    ),
+) + _totals_sensors()
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,

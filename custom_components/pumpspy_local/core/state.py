@@ -8,9 +8,13 @@ from a message means "unchanged", never "zero".
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import date
 
+from .gallons import DEFAULT_FLOW_RATE, estimated_gallons
 from .parser import BbsReading, Ping, PumpRun
+
+BACKUP_PUMP = "backup"
 
 # ``idpings_data_type`` 1 is Wi-Fi RSSI. Type 3 has been seen (~5.86) but nobody
 # has confirmed what it means, so it is deliberately not mapped to anything.
@@ -27,6 +31,32 @@ PING_WIFI_RSSI = 1
 DEFAULT_HEALTHY_RUN_MILLIAMPS = 1
 
 PRIMARY_PUMP = "primary"
+
+
+@dataclass
+class PumpTotals:
+    """Run and gallon counts for one pump."""
+
+    runs_today: int = 0
+    gallons_today: int = 0
+    runs_total: int = 0
+    gallons_total: int = 0
+
+    def add(self, gallons: int) -> None:
+        self.runs_today += 1
+        self.gallons_today += gallons
+        self.runs_total += 1
+        self.gallons_total += gallons
+
+    def reset_daily(self) -> None:
+        self.runs_today = 0
+        self.gallons_today = 0
+
+
+def _fresh_totals() -> dict[str, PumpTotals]:
+    # Counted per pump on purpose: backup runs mean the mains failed, and folding
+    # them into one figure would hide exactly the thing worth noticing.
+    return {PRIMARY_PUMP: PumpTotals(), BACKUP_PUMP: PumpTotals()}
 
 
 @dataclass
@@ -51,8 +81,17 @@ class DeviceState:
     # Minimum current for a primary run to count as evidence the pump works.
     healthy_run_milliamps: int = DEFAULT_HEALTHY_RUN_MILLIAMPS
 
-    def apply(self, reading: BbsReading) -> None:
-        """Merge a reading in, leaving fields it does not mention alone."""
+    last_run_gallons: int | None = None
+    totals: dict[str, PumpTotals] = field(default_factory=_fresh_totals)
+    totals_date: date | None = None
+    flow_rate: float = DEFAULT_FLOW_RATE
+
+    def apply(self, reading: BbsReading, today: date | None = None) -> None:
+        """Merge a reading in, leaving fields it does not mention alone.
+
+        ``today`` is passed in rather than read from the clock so the daily
+        rollover is testable; it defaults to the local date.
+        """
         for field in (
             "battery_volts",
             "loaded_volts",
@@ -66,8 +105,20 @@ class DeviceState:
 
         if reading.pump_run is not None:
             self.last_run = reading.pump_run
+            self._count_run(reading.pump_run, today or date.today())
             if self._is_healthy_primary_run(reading.pump_run):
                 self.motor_fail = False
+
+    def _count_run(self, run: PumpRun, today: date) -> None:
+        gallons = estimated_gallons(run.duration_seconds, self.flow_rate)
+        self.last_run_gallons = gallons
+
+        if self.totals_date != today:
+            for totals in self.totals.values():
+                totals.reset_daily()
+            self.totals_date = today
+
+        self.totals[run.pump].add(gallons)
 
     def _is_healthy_primary_run(self, run: PumpRun) -> bool:
         """Whether a run is evidence the primary pump is working.
@@ -105,18 +156,38 @@ class DeviceState:
                 if self.last_run is not None
                 else None
             ),
+            "last_run_gallons": self.last_run_gallons,
+            "totals_date": self.totals_date.isoformat() if self.totals_date else None,
+            "totals": {
+                pump: {
+                    "runs_today": totals.runs_today,
+                    "gallons_today": totals.gallons_today,
+                    "runs_total": totals.runs_total,
+                    "gallons_total": totals.gallons_total,
+                }
+                for pump, totals in self.totals.items()
+            },
         }
 
     @classmethod
     def from_stored(cls, device_id: str, stored: dict) -> DeviceState:
         """Rebuild from a stored payload, tolerating one written by an older version."""
         run = stored.get("last_run")
+        totals = _fresh_totals()
+        for pump, counts in (stored.get("totals") or {}).items():
+            if pump in totals:
+                totals[pump] = PumpTotals(**counts)
+
+        totals_date = stored.get("totals_date")
         return cls(
             device_id=device_id,
             motor_fail=stored.get("motor_fail"),
             ac_power=stored.get("ac_power"),
             high_water=stored.get("high_water"),
             last_run=PumpRun(**run) if run else None,
+            last_run_gallons=stored.get("last_run_gallons"),
+            totals=totals,
+            totals_date=date.fromisoformat(totals_date) if totals_date else None,
         )
 
     def apply_ping(self, ping: Ping) -> None:

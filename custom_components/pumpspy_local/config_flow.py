@@ -8,7 +8,9 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.helpers import selector
 
+from .core.gallons import DEFAULT_FLOW_RATE
 from .const import (
+    CONF_FLOW_RATE,
     CONF_PORT,
     CONF_UPSTREAM,
     DEFAULT_PORT,
@@ -28,6 +30,13 @@ SCHEMA = vol.Schema(
         ),
         vol.Required(CONF_UPSTREAM, default=DEFAULT_UPSTREAM): selector.TextSelector(
             selector.TextSelectorConfig(type=selector.TextSelectorType.URL)
+        ),
+        vol.Required(
+            CONF_FLOW_RATE, default=DEFAULT_FLOW_RATE
+        ): selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0.1, max=100, step=0.1, mode=selector.NumberSelectorMode.BOX
+            )
         ),
     }
 )

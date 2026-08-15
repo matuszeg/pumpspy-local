@@ -422,6 +422,68 @@ async def test_the_fault_can_be_cleared_from_home_assistant(hass, upstream, free
     assert fault_state() == "off"
 
 
+async def test_run_and_gallon_totals_appear(hass, upstream, free_port):
+    """Two runs of the captured 8.2s cycle, at the default one gallon per second."""
+    await _setup(hass, upstream, free_port)
+    body = (Path(__file__).parent / "fixtures" / "bbs_json_pump_run.txt").read_bytes()
+
+    async with ClientSession() as session:
+        for _ in range(2):
+            async with session.post(
+                f"http://127.0.0.1:{free_port}/bbs_json", data=body
+            ):
+                pass
+    await hass.async_block_till_done()
+
+    def state_ending(suffix: str) -> str:
+        matches = [
+            state
+            for state in hass.states.async_all("sensor")
+            if state.entity_id.endswith(suffix)
+        ]
+        assert len(matches) == 1, f"{suffix}: {[m.entity_id for m in matches]}"
+        return matches[0].state
+
+    assert state_ending("last_run_estimated_gallons") == "8"
+    assert state_ending("primary_runs_today") == "2"
+    assert state_ending("primary_estimated_gallons_today") == "16"
+    assert state_ending("primary_runs_total") == "2"
+
+    # The backup pump did not run, and must not be lumped in with the primary.
+    assert state_ending("backup_runs_today") == "0"
+    assert state_ending("backup_estimated_gallons_today") == "0"
+
+
+async def test_the_configured_flow_rate_changes_the_estimate(
+    hass, upstream, free_port
+):
+    """One gallon per second is nominal, not measured for a given install."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            "port": free_port,
+            "upstream": f"http://{upstream.host}:{upstream.port}",
+            "flow_rate": 0.5,
+        },
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    body = (Path(__file__).parent / "fixtures" / "bbs_json_pump_run.txt").read_bytes()
+    async with ClientSession() as session:
+        async with session.post(f"http://127.0.0.1:{free_port}/bbs_json", data=body):
+            pass
+    await hass.async_block_till_done()
+
+    gallons = next(
+        state.state
+        for state in hass.states.async_all("sensor")
+        if state.entity_id.endswith("last_run_estimated_gallons")
+    )
+    assert gallons == "4"  # 8.2s at half a gallon per second, rounded down
+
+
 async def test_unloading_releases_the_port(hass, upstream, free_port):
     """A reconfigure or reload must not leave the port held."""
     entry = await _setup(hass, upstream, free_port)

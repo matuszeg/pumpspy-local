@@ -16,8 +16,10 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
+from homeassistant.util import dt as dt_util
 
 from .const import (
+    CONF_FLOW_RATE,
     CONF_PORT,
     CONF_UPSTREAM,
     DOMAIN,
@@ -26,6 +28,7 @@ from .const import (
     signal_pump_run,
 )
 from .core.forward import ProxyRequest, forward
+from .core.gallons import DEFAULT_FLOW_RATE
 from .core.parser import BbsReading, Ping, parse_request
 from .core.state import DeviceState
 
@@ -73,6 +76,7 @@ class PumpspyRuntime:
     store: Store | None = None
     runner: web.AppRunner | None = None
     devices: dict[str, DeviceState] = field(default_factory=dict)
+    flow_rate: float = DEFAULT_FLOW_RATE
 
     def as_stored(self) -> dict:
         return {
@@ -93,7 +97,7 @@ class PumpspyRuntime:
         if device is not None:
             return device, False
 
-        device = DeviceState(device_id=device_id)
+        device = DeviceState(device_id=device_id, flow_rate=self.flow_rate)
         self.devices[device_id] = device
         _LOGGER.info("discovered device %s", device_id)
         return device, True
@@ -103,16 +107,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Start the listener the device reports to."""
     port: int = entry.data[CONF_PORT]
     upstream: str = entry.data[CONF_UPSTREAM].rstrip("/")
+    flow_rate: float = entry.data.get(CONF_FLOW_RATE, DEFAULT_FLOW_RATE)
 
     session = async_get_clientsession(hass)
     store: Store = Store(hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}")
-    runtime = PumpspyRuntime(store=store)
+    runtime = PumpspyRuntime(store=store, flow_rate=flow_rate)
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime
 
     # Restore what the device only tells us when it changes. Without this a
     # restart leaves the alarms reading unknown until the next real event.
     for device_id, stored in (await store.async_load() or {}).get("devices", {}).items():
-        runtime.devices[device_id] = DeviceState.from_stored(device_id, stored)
+        restored = DeviceState.from_stored(device_id, stored)
+        restored.flow_rate = runtime.flow_rate
+        runtime.devices[device_id] = restored
         _LOGGER.debug("restored device %s", device_id)
 
     def _record(runtime: PumpspyRuntime, parsed: object) -> None:
@@ -121,7 +128,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         if isinstance(parsed, BbsReading):
             device, is_new = runtime.device_for(parsed.device_id)
-            device.apply(parsed)
+            device.apply(parsed, today=dt_util.now().date())
             touched.append((device, is_new))
             if parsed.pump_run is not None:
                 # Set before dispatching: on a device's first message the event

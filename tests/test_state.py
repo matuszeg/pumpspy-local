@@ -4,6 +4,7 @@ The device sends only what changed, so state has to accumulate. This is the
 layer that turns a stream of partial messages into something an entity can read.
 """
 
+from datetime import date
 from pathlib import Path
 
 from custom_components.pumpspy_local.core.parser import parse_bbs_json, parse_pings
@@ -127,6 +128,72 @@ def test_the_fault_can_be_cleared_by_hand():
     state.clear_fault()
 
     assert state.motor_fail is False
+
+
+DAY = date(2026, 8, 14)
+NEXT_DAY = date(2026, 8, 15)
+
+
+def test_a_run_counts_towards_its_own_pump():
+    state = DeviceState(device_id="11111111111111")
+
+    state.apply(_run_reading(motor=1, mamp=2800), today=DAY)
+
+    assert state.totals["primary"].runs_today == 1
+    assert state.totals["primary"].gallons_today == 8  # 8.2s at 1 gal/s, rounded down
+    assert state.totals["backup"].runs_today == 0
+    assert state.totals["backup"].gallons_today == 0
+
+
+def test_runs_accumulate_across_the_day():
+    state = DeviceState(device_id="11111111111111")
+
+    state.apply(_run_reading(motor=1, mamp=2800), today=DAY)
+    state.apply(_run_reading(motor=1, mamp=2800), today=DAY)
+
+    assert state.totals["primary"].runs_today == 2
+    assert state.totals["primary"].gallons_today == 16
+
+
+def test_a_new_day_resets_the_daily_figures_but_not_the_lifetime_ones():
+    state = DeviceState(device_id="11111111111111")
+    state.apply(_run_reading(motor=1, mamp=2800), today=DAY)
+
+    state.apply(_run_reading(motor=1, mamp=2800), today=NEXT_DAY)
+
+    assert state.totals["primary"].runs_today == 1
+    assert state.totals["primary"].gallons_today == 8
+    assert state.totals["primary"].runs_total == 2
+    assert state.totals["primary"].gallons_total == 16
+
+
+def test_the_backup_pump_is_counted_separately():
+    """Backup runs mean the mains failed. Mixing them into one figure would hide that."""
+    state = DeviceState(device_id="11111111111111")
+
+    state.apply(_run_reading(motor=0, mamp=2800), today=DAY)
+
+    assert state.totals["backup"].runs_today == 1
+    assert state.totals["primary"].runs_today == 0
+
+
+def test_the_last_run_carries_its_own_gallon_estimate():
+    state = DeviceState(device_id="11111111111111")
+
+    state.apply(_run_reading(motor=1, mamp=2800), today=DAY)
+
+    assert state.last_run_gallons == 8
+
+
+def test_totals_survive_a_restart():
+    """Lifetime figures that reset on every restart would be meaningless."""
+    state = DeviceState(device_id="11111111111111")
+    state.apply(_run_reading(motor=1, mamp=2800), today=DAY)
+
+    restored = DeviceState.from_stored("11111111111111", state.to_stored())
+
+    assert restored.totals["primary"].runs_total == 1
+    assert restored.totals["primary"].gallons_today == 8
 
 
 def test_stored_state_round_trips():

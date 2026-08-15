@@ -7,6 +7,7 @@ MODEL = "PumpSpy / PitBoss+"
 
 CONF_PORT = "port"
 CONF_UPSTREAM = "upstream"
+CONF_FLOW_RATE = "flow_rate"
 
 # The port the device reports to, and the vendor it reports to. Both are what a
 # real installation needs; a development instance must point upstream somewhere
