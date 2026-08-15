@@ -264,10 +264,10 @@ async def test_the_whole_entity_set_appears_with_the_right_values(
                 pass
     await hass.async_block_till_done()
 
-    def state_ending(suffix: str) -> str:
+    def state_ending(suffix: str, domain: str = "sensor") -> str:
         matches = [
             state
-            for state in hass.states.async_all()
+            for state in hass.states.async_all(domain)
             if state.entity_id.endswith(suffix)
         ]
         assert len(matches) == 1, f"{suffix}: {[m.entity_id for m in matches]}"
@@ -282,9 +282,10 @@ async def test_the_whole_entity_set_appears_with_the_right_values(
     assert state_ending("last_run_duration") == "8.2"
     assert state_ending("last_run_current") == "2800"
 
-    assert state_ending("mains_power") == "off"  # ac_power 0 means mains lost
-    assert state_ending("high_water") == "on"
-    assert state_ending("pump_failure") == "on"
+    binary = "binary_sensor"
+    assert state_ending("mains_power", binary) == "off"  # ac_power 0 = mains lost
+    assert state_ending("high_water", binary) == "on"
+    assert state_ending("pump_failure", binary) == "on"
 
 
 async def test_a_pump_run_fires_an_event(hass, upstream, free_port):
@@ -347,6 +348,78 @@ async def test_a_message_without_a_run_fires_no_event(hass, upstream, free_port)
     events = hass.states.async_all("event")
     assert len(events) == 1  # the entity exists...
     assert events[0].state in (None, "unknown")  # ...but has never fired
+
+
+async def test_alarm_state_survives_a_restart(hass, upstream, free_port):
+    """The device sends these only when they change.
+
+    Without persistence, a restart leaves "mains power" reading unknown until
+    the next actual power cut, which could be months. An alarm whose resting
+    state is unknown cannot be alerted on.
+    """
+    entry = await _setup(hass, upstream, free_port)
+    fixtures = Path(__file__).parent / "fixtures"
+
+    async with ClientSession() as session:
+        for name in ("bbs_json_motor_fail.txt", "bbs_json_ac_power.txt"):
+            async with session.post(
+                f"http://127.0.0.1:{free_port}/bbs_json",
+                data=(fixtures / name).read_bytes(),
+            ):
+                pass
+    await hass.async_block_till_done()
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    device = runtime_of(hass, entry).devices["11111111111111"]
+    assert device.motor_fail is True
+    assert device.ac_power is False
+
+    fault = [
+        state
+        for state in hass.states.async_all("binary_sensor")
+        if state.entity_id.endswith("pump_failure")
+    ]
+    assert fault[0].state == "on"
+
+
+async def test_the_fault_can_be_cleared_from_home_assistant(hass, upstream, free_port):
+    """The automatic clear needs a current threshold nobody has calibrated.
+
+    Until it is trustworthy the user needs an unambiguous way out that does not
+    involve waiting for the pump to run.
+    """
+    await _setup(hass, upstream, free_port)
+    body = (Path(__file__).parent / "fixtures" / "bbs_json_motor_fail.txt").read_bytes()
+
+    async with ClientSession() as session:
+        async with session.post(f"http://127.0.0.1:{free_port}/bbs_json", data=body):
+            pass
+    await hass.async_block_till_done()
+
+    def fault_state() -> str:
+        return next(
+            state.state
+            for state in hass.states.async_all("binary_sensor")
+            if state.entity_id.endswith("pump_failure")
+        )
+
+    assert fault_state() == "on"
+
+    button = next(
+        state.entity_id
+        for state in hass.states.async_all("button")
+        if state.entity_id.endswith("clear_pump_failure")
+    )
+    await hass.services.async_call(
+        "button", "press", {"entity_id": button}, blocking=True
+    )
+    await hass.async_block_till_done()
+
+    assert fault_state() == "off"
 
 
 async def test_unloading_releases_the_port(hass, upstream, free_port):

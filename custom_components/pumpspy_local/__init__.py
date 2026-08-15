@@ -15,6 +15,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers.storage import Store
 
 from .const import (
     CONF_PORT,
@@ -30,7 +31,12 @@ from .core.state import DeviceState
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.BINARY_SENSOR, Platform.EVENT, Platform.SENSOR]
+PLATFORMS = [
+    Platform.BINARY_SENSOR,
+    Platform.BUTTON,
+    Platform.EVENT,
+    Platform.SENSOR,
+]
 
 # Headers that describe this hop rather than the request, and must not be relayed.
 _HOP_BY_HOP = {
@@ -53,12 +59,33 @@ _HOP_BY_HOP = {
 _BODYLESS_METHODS = {"GET", "HEAD", "DELETE", "OPTIONS", "TRACE"}
 
 
+STORAGE_VERSION = 1
+
+# Long enough that a burst of messages is one write, short enough that a hard
+# power cut to the whole machine loses very little.
+SAVE_DELAY_SECONDS = 10
+
+
 @dataclass
 class PumpspyRuntime:
     """What the integration keeps alive while it is loaded."""
 
+    store: Store | None = None
     runner: web.AppRunner | None = None
     devices: dict[str, DeviceState] = field(default_factory=dict)
+
+    def as_stored(self) -> dict:
+        return {
+            "devices": {
+                device_id: device.to_stored()
+                for device_id, device in self.devices.items()
+            }
+        }
+
+    def request_save(self) -> None:
+        """Ask for the current state to be written out shortly."""
+        if self.store is not None:
+            self.store.async_delay_save(self.as_stored, SAVE_DELAY_SECONDS)
 
     def device_for(self, device_id: str) -> tuple[DeviceState, bool]:
         """The state for a device, creating it the first time it reports."""
@@ -78,8 +105,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     upstream: str = entry.data[CONF_UPSTREAM].rstrip("/")
 
     session = async_get_clientsession(hass)
-    runtime = PumpspyRuntime()
+    store: Store = Store(hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}")
+    runtime = PumpspyRuntime(store=store)
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime
+
+    # Restore what the device only tells us when it changes. Without this a
+    # restart leaves the alarms reading unknown until the next real event.
+    for device_id, stored in (await store.async_load() or {}).get("devices", {}).items():
+        runtime.devices[device_id] = DeviceState.from_stored(device_id, stored)
+        _LOGGER.debug("restored device %s", device_id)
 
     def _record(runtime: PumpspyRuntime, parsed: object) -> None:
         """Fold a parsed message into device state and tell the entities."""
@@ -107,6 +141,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             if is_new:
                 async_dispatcher_send(hass, SIGNAL_NEW_DEVICE, device)
             async_dispatcher_send(hass, signal_device_update(device.device_id))
+
+        if touched:
+            runtime.request_save()
 
     async def handle(request: web.Request) -> web.Response:
         proxied = ProxyRequest(
@@ -150,6 +187,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded:
         runtime: PumpspyRuntime = hass.data[DOMAIN].pop(entry.entry_id)
+        if runtime.store is not None:
+            # Flush rather than leaving it to the delayed save, which would drop
+            # anything reported in the last few seconds.
+            await runtime.store.async_save(runtime.as_stored())
         if runtime.runner is not None:
             await runtime.runner.cleanup()
         _LOGGER.info("listener stopped")
