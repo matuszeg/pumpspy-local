@@ -1,5 +1,6 @@
 """Shared fixtures."""
 
+import asyncio
 import socket
 
 import pytest
@@ -71,3 +72,44 @@ async def keepalive_upstream(socket_enabled):
     server.peer_ports = peer_ports
     yield server
     await server.close()
+
+
+@pytest_asyncio.fixture
+async def flaky_upstream(socket_enabled):
+    """A vendor that hangs up on the first request without answering.
+
+    Exactly what the real one does, intermittently: it accepts the connection,
+    reads the request, then sends FIN with no response at all. Captured on the
+    wire against the live endpoint.
+    """
+    state = {"requests": 0}
+
+    async def handle(reader, writer):
+        state["requests"] += 1
+        try:
+            head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=5)
+            length = 0
+            for line in head.decode(errors="replace").split("\r\n"):
+                if line.lower().startswith("content-length:"):
+                    length = int(line.split(":")[1])
+            if length:
+                await reader.readexactly(length)
+        except (asyncio.IncompleteReadError, asyncio.TimeoutError, OSError):
+            pass
+
+        if state["requests"] == 1:
+            writer.close()  # hang up, no response
+            return
+
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+        try:
+            await writer.drain()
+        except OSError:
+            pass
+        writer.close()
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    server.host, server.port = server.sockets[0].getsockname()
+    server.state = state
+    yield server
+    server.close()

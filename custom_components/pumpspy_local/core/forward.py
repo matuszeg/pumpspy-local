@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from aiohttp import ClientSession, TCPConnector
+from aiohttp import ClientSession, ServerDisconnectedError, TCPConnector
 
 from .upstream import Target
 
@@ -53,11 +53,28 @@ async def forward(
     address rather than a name -- that is what keeps the redirect out of the
     path -- so without this the vendor would be addressed by IP and a
     name-based host would not recognise the request.
+
+    Retried once if the vendor hangs up without answering. It does this for
+    real, intermittently: captured on the wire, it accepts the connection,
+    takes the request, then sends FIN with no response. Passing that failure on
+    means the device retries instead, and it only tries three times before
+    dropping the event for good -- so a second vendor hiccup costs real pump
+    data. Nothing was answered, so the request was not processed and replaying
+    it is safe.
     """
-    async with session.request(
-        request.method,
-        f"{target.base_url}{request.path}",
-        headers={**request.headers, "Host": target.host_header},
-        data=request.body,
-    ) as response:
-        return ProxyResponse(status=response.status, body=await response.read())
+    for attempt in (1, 2):
+        try:
+            async with session.request(
+                request.method,
+                f"{target.base_url}{request.path}",
+                headers={**request.headers, "Host": target.host_header},
+                data=request.body,
+            ) as response:
+                return ProxyResponse(
+                    status=response.status, body=await response.read()
+                )
+        except ServerDisconnectedError:
+            if attempt == 2:
+                raise
+
+    raise AssertionError("unreachable")

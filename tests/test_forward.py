@@ -102,3 +102,33 @@ async def test_each_forward_opens_a_fresh_upstream_connection(keepalive_upstream
 
     ports = keepalive_upstream.peer_ports
     assert len(set(ports)) == 3, f"connection was reused: {ports}"
+
+
+async def test_a_vendor_that_hangs_up_without_answering_is_retried_once(
+    flaky_upstream,
+):
+    """The vendor does this for real, and the device pays for it otherwise.
+
+    Captured on the wire: the vendor accepts the connection, takes the request,
+    then sends FIN with no response. Turning that into an error hands the
+    failure to the device, which retries only three times before dropping the
+    event for good. Nothing was answered, so the request was not processed and
+    replaying it is safe.
+    """
+    async with upstream_session() as session:
+        response = await forward(
+            session,
+            Target(
+                base_url=f"http://{flaky_upstream.host}:{flaky_upstream.port}",
+                host_header="www.pumpspy.com:8081",
+            ),
+            ProxyRequest(
+                method="POST",
+                path="/bbs_json",
+                headers={"Content-Type": "application/json"},
+                body=b'{"deviceid":1}',
+            ),
+        )
+
+    assert response.status == 200
+    assert flaky_upstream.state["requests"] == 2, "should have tried exactly twice"
