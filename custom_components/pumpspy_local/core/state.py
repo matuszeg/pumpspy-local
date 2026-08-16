@@ -9,7 +9,7 @@ from a message means "unchanged", never "zero".
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 
 from .gallons import DEFAULT_FLOW_RATE, estimated_gallons
 from .parser import BbsReading, Ping, PumpRun
@@ -53,6 +53,25 @@ class PumpTotals:
         self.gallons_today = 0
 
 
+@dataclass
+class SelfTest:
+    """A backup run that was the controller exercising itself.
+
+    Kept rather than discarded because it is the best battery evidence there
+    is: three times a week the controller puts a real load on the battery and
+    we get to watch how far the voltage falls. Resting voltage says almost
+    nothing -- a battery near the end of its life rests healthy and collapses
+    under load -- so this is the measurement that shows one dying, months
+    ahead. It also answers "is the backup still being exercised at all", which
+    nothing else would reveal if the controller quietly stopped.
+    """
+
+    duration_seconds: float
+    current_milliamps: int
+    loaded_volts: float | None = None
+    at: datetime | None = None
+
+
 def _fresh_totals() -> dict[str, PumpTotals]:
     # Counted per pump on purpose: backup runs mean the mains failed, and folding
     # them into one figure would hide exactly the thing worth noticing.
@@ -82,15 +101,24 @@ class DeviceState:
     healthy_run_milliamps: int = DEFAULT_HEALTHY_RUN_MILLIAMPS
 
     last_run_gallons: int | None = None
+    last_self_test: SelfTest | None = None
     totals: dict[str, PumpTotals] = field(default_factory=_fresh_totals)
     totals_date: date | None = None
     flow_rate: float = DEFAULT_FLOW_RATE
 
-    def apply(self, reading: BbsReading, today: date | None = None) -> None:
+    def apply(
+        self,
+        reading: BbsReading,
+        today: date | None = None,
+        now: datetime | None = None,
+    ) -> None:
         """Merge a reading in, leaving fields it does not mention alone.
 
         ``today`` is passed in rather than read from the clock so the daily
-        rollover is testable; it defaults to the local date.
+        rollover is testable; it defaults to the local date. ``now`` timestamps
+        a backup self-test, and is passed in for the same reason. The device
+        sends its own clock too, but device clocks drift and this one is only
+        ever compared against Home Assistant's.
         """
         for field in (
             "battery_volts",
@@ -105,9 +133,45 @@ class DeviceState:
 
         if reading.pump_run is not None:
             self.last_run = reading.pump_run
-            self._count_run(reading.pump_run, today or date.today())
+            if self._is_self_test(reading.pump_run):
+                # Estimated gallons are derived from run length alone, so for a
+                # test that moved little or nothing the figure would be pure
+                # invention. Better to have none than a made-up one.
+                self.last_run_gallons = None
+                self.last_self_test = SelfTest(
+                    duration_seconds=reading.pump_run.duration_seconds,
+                    current_milliamps=reading.pump_run.current_milliamps,
+                    loaded_volts=self.loaded_volts,
+                    at=now,
+                )
+            else:
+                self._count_run(reading.pump_run, today or date.today())
             if self._is_healthy_primary_run(reading.pump_run):
                 self.motor_fail = False
+
+    def _is_self_test(self, run: PumpRun) -> bool:
+        """Whether a backup run was the controller exercising itself.
+
+        The controller tests the backup at least three times a week, so most
+        backup runs are routine. The device names both things that make one
+        real: ``motor_fail`` when the primary ran and the water did not go
+        down, and ``ac_power`` 0 when the mains are gone. A backup run with
+        neither is the scheduled test.
+
+        **Run length deliberately has no say.** Both self-tests observed lasted
+        exactly 10.0 seconds, which looked like a signature until the
+        float-lift capture turned up a genuine, float-driven backup run of
+        exactly 10.0 seconds too. That is the backup's minimum run, not a
+        fingerprint, and classifying by it would have filed a real emergency as
+        routine -- the one direction that must never fail.
+
+        ``motor_fail`` latches and is only cleared by a healthy primary run or
+        by hand, so a stale fault makes later tests look real. That is the safe
+        way round: over-reporting an emergency costs a wasted glance.
+        """
+        if run.pump != BACKUP_PUMP:
+            return False
+        return self.motor_fail is not True and self.ac_power is not False
 
     def _count_run(self, run: PumpRun, today: date) -> None:
         gallons = estimated_gallons(run.duration_seconds, self.flow_rate)
@@ -168,6 +232,21 @@ class DeviceState:
                 else None
             ),
             "last_run_gallons": self.last_run_gallons,
+            # A battery health record, so it is worth more the longer it lives.
+            "last_self_test": (
+                {
+                    "duration_seconds": self.last_self_test.duration_seconds,
+                    "current_milliamps": self.last_self_test.current_milliamps,
+                    "loaded_volts": self.last_self_test.loaded_volts,
+                    "at": (
+                        self.last_self_test.at.isoformat()
+                        if self.last_self_test.at is not None
+                        else None
+                    ),
+                }
+                if self.last_self_test is not None
+                else None
+            ),
             "totals_date": self.totals_date.isoformat() if self.totals_date else None,
             "totals": {
                 pump: {
@@ -184,6 +263,7 @@ class DeviceState:
     def from_stored(cls, device_id: str, stored: dict) -> DeviceState:
         """Rebuild from a stored payload, tolerating one written by an older version."""
         run = stored.get("last_run")
+        self_test = stored.get("last_self_test")
         totals = _fresh_totals()
         for pump, counts in (stored.get("totals") or {}).items():
             if pump in totals:
@@ -198,6 +278,20 @@ class DeviceState:
             loaded_volts=stored.get("loaded_volts"),
             last_run=PumpRun(**run) if run else None,
             last_run_gallons=stored.get("last_run_gallons"),
+            last_self_test=(
+                SelfTest(
+                    duration_seconds=self_test["duration_seconds"],
+                    current_milliamps=self_test["current_milliamps"],
+                    loaded_volts=self_test.get("loaded_volts"),
+                    at=(
+                        datetime.fromisoformat(self_test["at"])
+                        if self_test.get("at")
+                        else None
+                    ),
+                )
+                if self_test
+                else None
+            ),
             totals=totals,
             totals_date=date.fromisoformat(totals_date) if totals_date else None,
         )

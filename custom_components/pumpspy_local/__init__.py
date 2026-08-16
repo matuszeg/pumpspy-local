@@ -178,7 +178,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         if isinstance(parsed, BbsReading):
             device, is_new = runtime.device_for(parsed.device_id)
-            device.apply(parsed, today=dt_util.now().date())
+            # Local date for the daily rollover, UTC instant for timestamping a
+            # self-test -- one is a calendar question, the other a point in time.
+            device.apply(
+                parsed, today=dt_util.now().date(), now=dt_util.utcnow()
+            )
             touched.append((device, is_new))
             if parsed.pump_run is not None:
                 # Set before dispatching: on a device's first message the event

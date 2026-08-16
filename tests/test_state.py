@@ -4,7 +4,7 @@ The device sends only what changed, so state has to accumulate. This is the
 layer that turns a stream of partial messages into something an entity can read.
 """
 
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from custom_components.pumpspy_local.core.parser import parse_bbs_json, parse_pings
@@ -64,15 +64,17 @@ def test_a_later_message_does_not_erase_the_last_run():
     assert state.last_run is not None
 
 
-def _run_reading(*, motor: int, mamp: int):
+def _run_reading(*, motor: int, mamp: int, loaded: int | None = None):
     """A pump-run message with a chosen motor and current."""
     import json
 
     from custom_components.pumpspy_local.core.parser import parse_bbs_json
 
-    inner = json.dumps({"motor": motor, "time": 82, "mamp": mamp})
+    inner: dict = {"motor": motor, "time": 82, "mamp": mamp}
+    if loaded is not None:
+        inner["loaded"] = loaded
     return parse_bbs_json(
-        json.dumps({"deviceid": 11111111111111, "json": inner}).encode()
+        json.dumps({"deviceid": 11111111111111, "json": json.dumps(inner)}).encode()
     )
 
 
@@ -170,11 +172,115 @@ def test_a_new_day_resets_the_daily_figures_but_not_the_lifetime_ones():
 def test_the_backup_pump_is_counted_separately():
     """Backup runs mean the mains failed. Mixing them into one figure would hide that."""
     state = DeviceState(device_id="11111111111111")
+    state.apply(reading("bbs_json_ac_power.txt"))  # mains lost, so this is real
 
     state.apply(_run_reading(motor=0, mamp=2800), today=DAY)
 
     assert state.totals["backup"].runs_today == 1
     assert state.totals["primary"].runs_today == 0
+
+
+def test_a_routine_self_test_is_not_counted_as_a_backup_run():
+    """The controller exercises the backup at least three times a week.
+
+    Counting those inflates the lifetime figures with water that never moved.
+    Measured against the real pit -- 16" deep, 17" across, so 0.98 gallons per
+    inch -- a 10 second self-test was credited 10 gallons while the pit held
+    about two. Five times more water than physically existed, three times a
+    week, forever.
+    """
+    state = DeviceState(device_id="11111111111111")
+
+    state.apply(_run_reading(motor=0, mamp=5856), today=DAY)
+
+    assert state.totals["backup"].runs_today == 0
+    assert state.totals["backup"].gallons_today == 0
+    assert state.totals["backup"].runs_total == 0
+
+
+WHEN = datetime(2026, 8, 16, 14, 47, 55, tzinfo=timezone.utc)
+
+
+def test_a_self_test_is_recorded_rather_than_just_discarded():
+    """Excluding it from the counters is not the same as forgetting it.
+
+    Three times a week the controller puts a real load on the battery for us.
+    The voltage it sags to under that load is the measurement that reveals a
+    dying battery, months before it strands anyone -- resting voltage stays
+    healthy right up until the collapse.
+    """
+    state = DeviceState(device_id="11111111111111")
+
+    state.apply(_run_reading(motor=0, mamp=5856, loaded=12558), today=DAY, now=WHEN)
+
+    assert state.last_self_test is not None
+    assert state.last_self_test.at == WHEN
+    assert state.last_self_test.duration_seconds == 8.2
+    assert state.last_self_test.current_milliamps == 5856
+    assert state.last_self_test.loaded_volts == 12.558
+
+
+def test_a_real_backup_run_is_not_recorded_as_a_self_test():
+    state = DeviceState(device_id="11111111111111")
+    state.apply(reading("bbs_json_motor_fail.txt"))
+
+    state.apply(_run_reading(motor=0, mamp=5856, loaded=12558), today=DAY, now=WHEN)
+
+    assert state.last_self_test is None
+
+
+def test_a_self_test_estimates_no_gallons():
+    """Gallons are derived from run length, so for a test they would be fiction.
+
+    The pit holds about two gallons at its resting level; a 10 second test was
+    credited ten. None is the honest answer, not a number.
+    """
+    state = DeviceState(device_id="11111111111111")
+
+    state.apply(_run_reading(motor=0, mamp=5856), today=DAY, now=WHEN)
+
+    assert state.last_run_gallons is None
+
+
+def test_the_last_self_test_survives_a_restart():
+    """It is a battery health record, so losing it on restart defeats the point."""
+    state = DeviceState(device_id="11111111111111")
+    state.apply(_run_reading(motor=0, mamp=5856, loaded=12558), today=DAY, now=WHEN)
+    assert state.last_self_test is not None  # guard against a vacuous pass
+
+    restored = DeviceState.from_stored("11111111111111", state.to_stored())
+
+    assert restored.last_self_test == state.last_self_test
+
+
+def test_a_backup_run_after_a_primary_failure_is_counted():
+    """The device names the cause, so we do not have to guess at it."""
+    state = DeviceState(device_id="11111111111111")
+    state.apply(reading("bbs_json_motor_fail.txt"))
+
+    state.apply(_run_reading(motor=0, mamp=5856), today=DAY)
+
+    assert state.totals["backup"].runs_today == 1
+
+
+def test_run_length_is_not_used_to_spot_a_self_test():
+    """A real backup run of exactly 10.0s exists in the float-lift capture.
+
+    Both self-tests observed also lasted exactly 10.0s, which made duration look
+    like a signature. It is not one -- it is the backup's minimum run length.
+    Classifying by it would file a real emergency as routine, so this pins that
+    duration has no say: same length, opposite verdicts, decided by motor_fail.
+    """
+    quiet = DeviceState(device_id="11111111111111")
+    failed = DeviceState(device_id="11111111111111")
+    failed.apply(reading("bbs_json_motor_fail.txt"))
+
+    ten_seconds = dict(motor=0, mamp=5856)
+    quiet.apply(_run_reading(**ten_seconds), today=DAY)
+    failed.apply(_run_reading(**ten_seconds), today=DAY)
+
+    assert quiet.totals["backup"].runs_today == 0
+    assert failed.totals["backup"].runs_today == 1
 
 
 def test_the_last_run_carries_its_own_gallon_estimate():

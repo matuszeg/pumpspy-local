@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -35,7 +36,7 @@ from .entity import PumpspyEntity
 class PumpspySensorDescription(SensorEntityDescription):
     """A sensor and how to read it out of device state."""
 
-    value_fn: Callable[[DeviceState], float | str | None]
+    value_fn: Callable[[DeviceState], float | str | datetime | None]
 
 
 SENSORS: tuple[PumpspySensorDescription, ...] = (
@@ -139,6 +140,32 @@ def _totals_sensors() -> tuple[PumpspySensorDescription, ...]:
 
 
 SENSORS = SENSORS + (
+    # The controller load-tests the backup battery for us at least three times a
+    # week. Those runs are kept out of the backup counters -- they move little
+    # or no water -- but the measurement is too good to throw away: resting
+    # voltage stays healthy on a battery that is nearly dead, and this is the
+    # only regular look at what it does under real load.
+    PumpspySensorDescription(
+        key="last_self_test",
+        name="Last self test",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda device: (
+            device.last_self_test.at if device.last_self_test else None
+        ),
+    ),
+    PumpspySensorDescription(
+        key="last_self_test_voltage",
+        # The number that actually reveals a dying battery: how far the pack
+        # sagged while the backup pump was pulling current.
+        name="Last self test voltage",
+        device_class=SensorDeviceClass.VOLTAGE,
+        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda device: (
+            device.last_self_test.loaded_volts if device.last_self_test else None
+        ),
+    ),
     PumpspySensorDescription(
         key="last_run_estimated_gallons",
         # "Estimated" in the name on purpose: this is derived from run duration,
