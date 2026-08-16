@@ -363,6 +363,21 @@ views:
           # identical for the first 38 characters, so the legend truncates away
           # the only part that distinguishes them and the two series look like
           # the same thing twice. Put the distinguishing word first.
+          # The controller load-tests the battery for us at least three times a
+          # week. Those runs are kept out of the backup counters -- they move
+          # little or no water -- but the measurement is the best battery
+          # evidence available: a scheduled look at what the pack does under
+          # real current. If the self-test date stops advancing, the controller
+          # itself has stopped testing, and nothing else would say so.
+          - type: horizontal-stack
+            cards:
+              - type: tile
+                entity: sensor.pumpspy_your_device_id_last_self_test
+                name: Last self-test
+              - type: tile
+                entity: sensor.pumpspy_your_device_id_last_self_test_voltage
+                name: Sagged to
+
           - type: history-graph
             title: Resting vs under load
             hours_to_show: 168
@@ -371,6 +386,8 @@ views:
                 name: Resting
               - entity: sensor.pumpspy_your_device_id_battery_voltage_under_load
                 name: Under load
+              - entity: sensor.pumpspy_your_device_id_last_self_test_voltage
+                name: Self-test
 
       # ── Activity ──────────────────────────────────────────────────────────
       - type: grid
