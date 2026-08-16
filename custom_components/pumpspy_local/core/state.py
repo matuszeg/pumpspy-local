@@ -139,14 +139,25 @@ class DeviceState:
     def to_stored(self) -> dict:
         """The part of this state worth surviving a restart.
 
-        Only what the device reports *on change*. Voltages and signal strength
-        arrive on their own schedule and will be resent within a cycle, so
-        restoring them would just show a stale number as though it were current.
+        The test is whether the device reports it *continuously* or only when
+        something happens. Resting voltage and signal strength arrive every
+        couple of minutes, so restoring them would paint a stale number as
+        current for no gain -- they refresh immediately anyway.
+
+        ``loaded_volts`` looks like a voltage but belongs with the events. It
+        is only ever sent alongside a pump run, so it is not resent within a
+        cycle; it is resent on the next run, which on a pit that stays dry can
+        be weeks away. The device treats it as retained itself -- captures show
+        it repeating the last measured figure on subsequent runs rather than
+        remeasuring. Dropping it discards the one reading that reveals a dying
+        battery, silently, and leaves the entity reading unknown as though
+        nothing had ever happened.
         """
         return {
             "motor_fail": self.motor_fail,
             "ac_power": self.ac_power,
             "high_water": self.high_water,
+            "loaded_volts": self.loaded_volts,
             "last_run": (
                 {
                     "pump": self.last_run.pump,
@@ -184,6 +195,7 @@ class DeviceState:
             motor_fail=stored.get("motor_fail"),
             ac_power=stored.get("ac_power"),
             high_water=stored.get("high_water"),
+            loaded_volts=stored.get("loaded_volts"),
             last_run=PumpRun(**run) if run else None,
             last_run_gallons=stored.get("last_run_gallons"),
             totals=totals,

@@ -213,22 +213,50 @@ def test_stored_state_round_trips():
     assert restored.last_run.duration_seconds == 8.2
 
 
-def test_periodic_readings_are_not_stored():
-    """Voltages and signal strength arrive on their own schedule.
+def test_continuously_reported_readings_are_not_stored():
+    """Resting voltage and signal strength arrive every couple of minutes.
 
-    Restoring them would show a stale number as though it were current, and the
-    device will resend within a cycle anyway. Only what the device reports
-    *on change* is worth keeping.
+    Restoring those would show a stale number as though it were current, for no
+    gain -- the device resends within a cycle regardless. The line is drawn at
+    *reported continuously* versus *reported only when something happens*, not
+    at voltages versus everything else, which is why the loaded voltage sits on
+    the other side of it. See the test above.
     """
     state = DeviceState(device_id="11111111111111")
     state.apply(reading("bbs_json_pump_run.txt"))
     state.apply_ping(pings("pings_rssi_type1.txt")[0])
+    # Guard: both must have been set, or this proves nothing.
+    assert state.battery_volts is not None
+    assert state.wifi_dbm is not None
 
     restored = DeviceState.from_stored("11111111111111", state.to_stored())
 
     assert restored.battery_volts is None
-    assert restored.loaded_volts is None
     assert restored.wifi_dbm is None
+
+
+def test_the_loaded_voltage_survives_a_restart():
+    """The one reading that reveals a dying battery must not evaporate.
+
+    Unlike resting voltage, `loaded` is only sent alongside a pump run, so it
+    is not resent within a cycle -- it is resent on the next run, and on a pit
+    that stays dry that can be weeks. The device itself treats it as retained:
+    captures show it repeating the last measured figure on later runs rather
+    than remeasuring, and reporting 0 before it has ever had a load to measure.
+
+    Losing it is silent, which is the worst part. The entity just reads
+    unknown, which looks like "nothing has happened yet" rather than "we were
+    told and we forgot".
+    """
+    state = DeviceState(device_id="11111111111111")
+    state.apply(reading("bbs_json_pump_run.txt"))
+    # Guard: if the fixture ever loses its `loaded` field this test would pass
+    # while proving nothing.
+    assert state.loaded_volts is not None
+
+    restored = DeviceState.from_stored("11111111111111", state.to_stored())
+
+    assert restored.loaded_volts == state.loaded_volts
 
 
 def test_stored_state_survives_missing_keys():
