@@ -639,3 +639,18 @@ async def test_a_redirect_that_points_back_at_us_is_refused(hass, free_port, cap
                 assert response.status == 502
 
     assert "192.168.7.57" in caplog.text
+
+
+async def test_unloading_closes_the_upstream_session(hass, upstream, free_port):
+    """We own this session now, so we have to clean it up.
+
+    Home Assistant closes its own shared session; a session we create is ours,
+    and leaking one per reload would leak its connector and sockets with it.
+    """
+    entry = await _setup(hass, upstream, free_port)
+    session = runtime_of(hass, entry).session
+    assert not session.closed
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+    assert session.closed

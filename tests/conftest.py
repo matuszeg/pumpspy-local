@@ -48,3 +48,26 @@ async def upstream(socket_enabled):
     server.reply = reply
     yield server
     await server.close()
+
+
+@pytest_asyncio.fixture
+async def keepalive_upstream(socket_enabled):
+    """A stand-in vendor that keeps connections alive and records their ports.
+
+    Deliberately does not force_close: that is what lets a client pool a
+    connection and reuse it, which is the behaviour under test.
+    """
+    peer_ports: list[int] = []
+
+    async def handler(request):
+        await request.read()
+        peer_ports.append(request.transport.get_extra_info("peername")[1])
+        return web.Response(status=200, body=b"ok")
+
+    app = web.Application()
+    app.router.add_route("*", "/{tail:.*}", handler)
+    server = TestServer(app)
+    await server.start_server()
+    server.peer_ports = peer_ports
+    yield server
+    await server.close()

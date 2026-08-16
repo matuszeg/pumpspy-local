@@ -4,9 +4,26 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from aiohttp import ClientSession
+from aiohttp import ClientSession, TCPConnector
 
 from .upstream import Target
+
+
+def upstream_session() -> ClientSession:
+    """A session for vendor traffic that never reuses a connection.
+
+    Home Assistant's shared session pools connections, which is right for
+    ordinary integrations and wrong here. The device reports every couple of
+    minutes, so a pooled connection to the vendor sits idle far longer than the
+    vendor is willing to hold it open. When the vendor's close crosses our next
+    request on the wire the request fails outright -- and aiohttp will not
+    replay a POST, so that message never reaches the vendor at all.
+
+    A fresh connection per request costs one handshake and removes the race.
+    It is also what the device itself does: every request it sends carries
+    Connection: close.
+    """
+    return ClientSession(connector=TCPConnector(force_close=True))
 
 
 @dataclass(frozen=True)

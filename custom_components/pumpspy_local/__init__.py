@@ -10,11 +10,10 @@ import logging
 from dataclasses import dataclass, field
 from datetime import timedelta
 
-from aiohttp import ClientError, web
+from aiohttp import ClientError, ClientSession, web
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
@@ -37,7 +36,7 @@ from .const import (
     signal_device_update,
     signal_pump_run,
 )
-from .core.forward import ProxyRequest, ProxyResponse, forward
+from .core.forward import ProxyRequest, ProxyResponse, forward, upstream_session
 from .core.firmware import FirmwareChecker, Reply, Verdict, classify
 from .core.gallons import DEFAULT_FLOW_RATE
 from .core.parser import BbsReading, Ping, parse_request
@@ -92,6 +91,8 @@ class PumpspyRuntime:
 
     store: Store | None = None
     runner: web.AppRunner | None = None
+    # Ours, not Home Assistant's shared one, so unload has to close it.
+    session: ClientSession | None = None
     devices: dict[str, DeviceState] = field(default_factory=dict)
     flow_rate: float = DEFAULT_FLOW_RATE
     check_interval: timedelta = timedelta(hours=DEFAULT_CHECK_INTERVAL_HOURS)
@@ -153,10 +154,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         override=entry.data.get(CONF_UPSTREAM_IP) or None,
     )
 
-    session = async_get_clientsession(hass)
+    session = upstream_session()
     store: Store = Store(hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}")
     runtime = PumpspyRuntime(
         store=store,
+        session=session,
         flow_rate=flow_rate,
         check_interval=timedelta(hours=check_hours),
     )
@@ -314,5 +316,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await runtime.store.async_save(runtime.as_stored())
         if runtime.runner is not None:
             await runtime.runner.cleanup()
+        if runtime.session is not None:
+            await runtime.session.close()
         _LOGGER.info("listener stopped")
     return unloaded
