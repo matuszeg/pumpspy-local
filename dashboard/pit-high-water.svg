@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 430" width="340" height="430"
+     role="img" aria-label="Water risen to the high water alarm float">
+  <title>High water</title>
+  <desc>
+    Overlay drawn only while the high water alarm float reports on. Identical
+    viewBox to pit.svg so it composites in place with no positioning.
+  </desc>
+
+  <!--
+    This is the one water level the device can actually vouch for: the alarm
+    float is up, so water is at 14 inches. Everything else stays transparent so
+    the diagram underneath shows through unchanged.
+  -->
+  <defs>
+    <linearGradient id="floodWater" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#4a9fd4"/>
+      <stop offset="100%" stop-color="#1d5c86"/>
+    </linearGradient>
+  </defs>
+
+  <g font-family="ui-sans-serif, system-ui, -apple-system, sans-serif">
+    <path d="M42 109.5 L168 109.5 L168 374 Q168 384 158 384 L52 384 Q42 384 42 374 Z"
+          fill="url(#floodWater)"/>
+
+    <!-- The surface carries the alarm colour; the water still reads as water. -->
+    <rect x="42" y="106" width="126" height="4" fill="#e0556c"/>
+
+    <text x="105" y="96" text-anchor="middle" font-size="12" font-weight="700"
+          fill="#e0556c" letter-spacing="0.5">HIGH WATER</text>
+  </g>
+</svg>

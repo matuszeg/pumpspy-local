@@ -1,0 +1,114 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 430" width="340" height="430"
+     role="img" aria-label="Sump pit diagram with float switch heights to scale">
+  <title>Sump pit</title>
+  <desc>
+    A 16 inch deep, 17 inch diameter pit. The vertical axis is to scale: the
+    primary float switches on at 7 inches, the backup at 12 inches, and the
+    high water alarm float at 14 inches. Background layer only -- every live
+    value is overlaid by the dashboard card.
+  </desc>
+
+  <!--
+    Scale: the pit floor is y=386 and the underside of the lid is y=70, so
+    316px covers 16 inches at 19.75px per inch. Any height h in inches sits at
+    y = 386 - 19.75h. Measured on the real install 2026-08-16; if you rebuild
+    this for a different pit, that one line is the only arithmetic to redo.
+
+    Nothing in here is live. Colours are mid-tones on a transparent ground so
+    the drawing reads on both a light and a dark Home Assistant theme.
+  -->
+
+  <g font-family="ui-sans-serif, system-ui, -apple-system, sans-serif">
+
+    <!-- ── depth scale, outside the pit ─────────────────────────────────── -->
+    <g stroke="#8b939d" stroke-width="1" opacity="0.55">
+      <line x1="30" y1="386" x2="38" y2="386"/>
+      <line x1="30" y1="307" x2="38" y2="307"/>
+      <line x1="30" y1="228" x2="38" y2="228"/>
+      <line x1="30" y1="149" x2="38" y2="149"/>
+      <line x1="30" y1="70"  x2="38" y2="70"/>
+    </g>
+    <g font-size="9" fill="#79828d" text-anchor="end">
+      <text x="26" y="389">0"</text>
+      <text x="26" y="310">4"</text>
+      <text x="26" y="231">8"</text>
+      <text x="26" y="152">12"</text>
+      <text x="26" y="73">16"</text>
+    </g>
+
+    <!-- ── the pit ───────────────────────────────────────────────────────── -->
+    <!-- Open at the top: the lid is where the scale ends, not a drawn lip. -->
+    <path d="M40 70 L40 374 Q40 386 52 386 L158 386 Q170 386 170 374 L170 70"
+          fill="#78828f" fill-opacity="0.10"
+          stroke="#7a828c" stroke-width="2.5" stroke-linejoin="round"/>
+
+    <!-- ── resting water, 2 inches ───────────────────────────────────────── -->
+    <!--
+      Drawn faintly and labelled, because it is a tape-measure reading from one
+      morning, not telemetry. There is no level sensor on this system and never
+      will be: the only level facts the device ever reports are that a float was
+      reached. Anything that looks like a live level here would be invented.
+    -->
+    <path d="M42 346.5 L168 346.5 L168 374 Q168 384 158 384 L52 384 Q42 384 42 374 Z"
+          fill="#3d7fa8" fill-opacity="0.38"/>
+    <line x1="42" y1="346.5" x2="168" y2="346.5" stroke="#5ba3d0" stroke-width="1.5" opacity="0.8"/>
+    <text x="46" y="341" font-size="8" fill="#79828d">resting ≈2" · not sensed</text>
+
+    <!-- ── float thresholds ──────────────────────────────────────────────── -->
+    <!-- Every one of these is measured, not from the manual's defaults. -->
+
+    <!-- high water alarm float, 14" -->
+    <line x1="40" y1="109.5" x2="196" y2="109.5"
+          stroke="#c0455a" stroke-width="1.5" stroke-dasharray="5 4"/>
+    <circle cx="170" cy="109.5" r="4.5" fill="none" stroke="#c0455a" stroke-width="2"/>
+    <!-- Named for the level, not the state: "HIGH WATER" is what the card
+         says when the float is up, and two of them would read as one thing. -->
+    <text x="202" y="107" font-size="10.5" font-weight="600" fill="#c0455a">ALARM FLOAT</text>
+    <text x="202" y="120" font-size="9" fill="#79828d">14" · high water</text>
+
+    <!-- backup pump on, 12" -->
+    <line x1="40" y1="149" x2="196" y2="149"
+          stroke="#c99a3f" stroke-width="1.5" stroke-dasharray="5 4"/>
+    <circle cx="170" cy="149" r="4.5" fill="none" stroke="#c99a3f" stroke-width="2"/>
+    <text x="202" y="146" font-size="10.5" font-weight="600" fill="#b8862a">BACKUP ON</text>
+    <text x="202" y="159" font-size="9" fill="#79828d">12" · battery pump</text>
+
+    <!-- primary pump on, 7" -->
+    <line x1="40" y1="247.75" x2="196" y2="247.75"
+          stroke="#4a7fa8" stroke-width="1.5" stroke-dasharray="5 4"/>
+    <circle cx="170" cy="247.75" r="4.5" fill="none" stroke="#4a7fa8" stroke-width="2"/>
+    <text x="202" y="245" font-size="10.5" font-weight="600" fill="#3d7fa8">PRIMARY ON</text>
+    <text x="202" y="258" font-size="9" fill="#79828d">7" · mains pump</text>
+
+    <!-- ── what the gaps are worth, in water ─────────────────────────────── -->
+    <!--
+      0.983 gallons per inch, from the measured 17" diameter. This is the pit's
+      own arithmetic and it is what makes the run counters checkable: a backup
+      self-test that claims 10 gallons is claiming five times the water this
+      pit can hold below the alarm float.
+    -->
+    <g font-size="8" fill="#79828d" opacity="0.9">
+      <text x="202" y="288">17" across · 0.98 gal per inch</text>
+      <text x="202" y="299">full pit ≈ 15.7 gal</text>
+    </g>
+
+    <!-- ── captions for the values the card overlays ─────────────────────── -->
+    <g font-size="8.5" fill="#79828d" letter-spacing="1.3">
+      <text x="202" y="322">BATTERY</text>
+      <text x="202" y="372">LAST RUN</text>
+    </g>
+    <line x1="202" y1="326" x2="332" y2="326" stroke="#79828d" stroke-width="0.75" opacity="0.35"/>
+    <line x1="202" y1="376" x2="332" y2="376" stroke="#79828d" stroke-width="0.75" opacity="0.35"/>
+
+    <!-- ── pump labels ───────────────────────────────────────────────────── -->
+    <!--
+      Deliberately not drawn inside the pit. The primary's 9" body sits on the
+      floor, but the backup's mounting height was never measured, so drawing
+      either one in place would be half fact and half guess.
+    -->
+    <g font-size="9" fill="#79828d">
+      <text x="40" y="404">primary 9" body</text>
+      <text x="40" y="416">backup 8" body</text>
+    </g>
+  </g>
+</svg>

@@ -1,0 +1,466 @@
+# pumpspy-local dashboard
+#
+# To use this:
+#
+# 1. Copy `pit.svg` and `pit-high-water.svg` from this directory into your
+#    Home Assistant config at `www/pumpspy/`, creating the folders if needed,
+#    so they end up at `config/www/pumpspy/pit.svg`. Home Assistant serves
+#    anything under `www/` at `/local/`, which is where the card looks.
+# 2. Copy the whole of this file, open your dashboard's raw configuration
+#    editor (three dots -> Edit dashboard -> three dots -> Raw configuration
+#    editor) and paste it in.
+# 3. Find-and-replace `your_device_id` with your own device id. It is in your
+#    entity ids -- look at any entity this integration made, for example
+#    `sensor.pumpspy_123456789012345_battery_voltage`, and take the number in
+#    the middle.
+#
+# The pit drawing is to scale on the vertical axis, but it is scaled to *one
+# particular pit* -- 16 inches deep, floats at 7, 12 and 14 inches. If yours
+# differs, edit `pit.svg`: it is plain SVG with the arithmetic written into a
+# comment at the top, and the float heights are the only numbers to change.
+#
+# Everything here is a built-in card except the status chips, which use
+# Mushroom (HACS). If you would rather not install it, delete the `chips` card
+# and uncomment the plain `tile` row underneath it -- it shows the same four
+# things.
+
+views:
+  - title: Sump
+    path: sump
+    type: sections
+    max_columns: 2
+    sections:
+
+      # ── Status ────────────────────────────────────────────────────────────
+      # The rule for this row: only things that would make you act tonight.
+      - type: grid
+        cards:
+          - type: heading
+            heading: Sump pit
+            heading_style: title
+
+          # ── Alerts ─────────────────────────────────────────────────────────
+          #
+          # These three are what "act tonight" actually means, and each is a
+          # state the device explicitly reports rather than something inferred.
+          # They are deliberately built-in `markdown` cards, not Mushroom: the
+          # most important thing on the dashboard should not stop working
+          # because a HACS component failed to load.
+          #
+          # Note these alarm on the *cause*, not the symptom. A backup run is a
+          # symptom that has an innocent explanation three times a week; a
+          # latched pump failure or lost mains does not.
+          - type: conditional
+            conditions:
+              - condition: state
+                entity: binary_sensor.pumpspy_your_device_id_pump_failure
+                state: "on"
+            card:
+              type: markdown
+              content: >-
+                ## 🚨 PRIMARY PUMP FAILURE
+
+
+                The controller reports the primary pump failed. The backup is
+                now the only thing standing between the water and the basement,
+                and it runs off a battery that will not last indefinitely.
+
+
+                This latches — the device never withdraws it. It clears on the
+                next healthy primary run, or with the button below.
+
+          - type: conditional
+            conditions:
+              - condition: state
+                entity: binary_sensor.pumpspy_your_device_id_mains_power
+                state: "off"
+            card:
+              type: markdown
+              content: >-
+                ## ⚡ MAINS POWER LOST
+
+
+                The primary pump cannot run. Everything now depends on the
+                backup pump and the battery — watch the voltage under load
+                below, not the resting voltage.
+
+          - type: conditional
+            conditions:
+              - condition: state
+                entity: binary_sensor.pumpspy_your_device_id_high_water
+                state: "on"
+            card:
+              type: markdown
+              content: >-
+                ## 🌊 HIGH WATER
+
+
+                Water has reached the alarm float at 14 inches — two inches
+                above the point where the backup engages, and two inches below
+                the lid. Both pumps are either failing or being outrun.
+
+          # The hero. The drawing is to scale on the vertical axis against
+          # measured float heights, and every number laid over it is live.
+          #
+          # There is no continuous water level here and there never will be --
+          # the device has no level sensor, and the only level facts it ever
+          # reports are that a float was reached. So the pit shows the
+          # thresholds, and fills with water in exactly one case: the alarm
+          # float is up, which is the one level the device can vouch for.
+          - type: picture-elements
+            image: /local/pumpspy/pit.svg
+            elements:
+
+              - type: conditional
+                conditions:
+                  - condition: state
+                    entity: binary_sensor.pumpspy_your_device_id_high_water
+                    state: "on"
+                elements:
+                  - type: image
+                    image: /local/pumpspy/pit-high-water.svg
+                    style:
+                      top: 50%
+                      left: 50%
+                      width: 100%
+
+              # Resting voltage. Worth knowing that this dips during a run too
+              # -- the device reports the sagging figure in both fields while
+              # the pump pulls -- so the two numbers below read as a matched
+              # pair for a minute or so after any run, then separate again.
+              - type: state-label
+                entity: sensor.pumpspy_your_device_id_battery_voltage
+                suffix: " V"
+                style:
+                  top: 79.1%
+                  left: 59.4%
+                  transform: translate(0, -50%)
+                  font-size: 17px
+                  font-weight: "600"
+                  color: var(--primary-text-color)
+
+              - type: state-label
+                entity: sensor.pumpspy_your_device_id_battery_voltage_under_load
+                prefix: "under load "
+                suffix: " V"
+                style:
+                  top: 83.3%
+                  left: 59.4%
+                  transform: translate(0, -50%)
+                  font-size: 11px
+                  color: var(--secondary-text-color)
+
+              - type: state-label
+                entity: sensor.pumpspy_your_device_id_last_pump
+                style:
+                  top: 91.2%
+                  left: 59.4%
+                  transform: translate(0, -50%)
+                  font-size: 13px
+                  font-weight: "600"
+                  color: var(--primary-text-color)
+                  text-transform: capitalize
+
+              - type: state-label
+                entity: sensor.pumpspy_your_device_id_last_run_duration
+                suffix: " s"
+                style:
+                  top: 91.2%
+                  left: 79%
+                  transform: translate(0, -50%)
+                  font-size: 13px
+                  color: var(--secondary-text-color)
+
+          # Mains, high water and pump failure are reported only when they
+          # *change* -- the device announces mains lost and mains restored, and
+          # says nothing at all in between. So until one of them happens we
+          # have never been told, and the honest answer is "no report", not
+          # "fine". These chips show that as a third, grey state. Painting an
+          # unheard-from sensor green on a flood display is how you get someone
+          # to stop checking the basement.
+          - type: custom:mushroom-chips-card
+            alignment: justify
+            chips:
+              - type: template
+                entity: binary_sensor.pumpspy_your_device_id_mains_power
+                icon: >-
+                  {% if states(entity) == 'on' %}mdi:transmission-tower
+                  {% elif states(entity) == 'off' %}mdi:transmission-tower-off
+                  {% else %}mdi:help-circle-outline{% endif %}
+                icon_color: >-
+                  {% if states(entity) == 'on' %}green
+                  {% elif states(entity) == 'off' %}red
+                  {% else %}grey{% endif %}
+                content: >-
+                  {% if states(entity) == 'on' %}Mains
+                  {% elif states(entity) == 'off' %}Mains lost
+                  {% else %}Mains: no report{% endif %}
+
+              - type: template
+                entity: binary_sensor.pumpspy_your_device_id_high_water
+                icon: >-
+                  {% if states(entity) == 'on' %}mdi:waves-arrow-up
+                  {% elif states(entity) == 'off' %}mdi:waves
+                  {% else %}mdi:help-circle-outline{% endif %}
+                icon_color: >-
+                  {% if states(entity) == 'on' %}red
+                  {% elif states(entity) == 'off' %}green
+                  {% else %}grey{% endif %}
+                content: >-
+                  {% if states(entity) == 'on' %}HIGH WATER
+                  {% elif states(entity) == 'off' %}Level OK
+                  {% else %}Level: no report{% endif %}
+
+              # The device latches a fault and never sends the all-clear, so
+              # "off" here means someone pressed the clear button, not that the
+              # device said so.
+              - type: template
+                entity: binary_sensor.pumpspy_your_device_id_pump_failure
+                icon: >-
+                  {% if states(entity) == 'on' %}mdi:alert
+                  {% elif states(entity) == 'off' %}mdi:check-circle-outline
+                  {% else %}mdi:help-circle-outline{% endif %}
+                icon_color: >-
+                  {% if states(entity) == 'on' %}red
+                  {% elif states(entity) == 'off' %}green
+                  {% else %}grey{% endif %}
+                content: >-
+                  {% if states(entity) == 'on' %}PUMP FAULT
+                  {% elif states(entity) == 'off' %}No fault
+                  {% else %}Fault: no report{% endif %}
+              # "Monitoring alive" is not one of our entities and cannot be:
+              # every part of this chain fails silently, and a stale reading
+              # looks exactly like a calm sump. So it is derived from how long
+              # ago the device last reported. It reports every few seconds, so
+              # anything past a couple of minutes means the chain is broken --
+              # the device, the redirect, or this integration.
+              - type: template
+                entity: sensor.pumpspy_your_device_id_battery_voltage
+                icon: >-
+                  {% set age = now() - states[entity].last_reported %}
+                  {{ 'mdi:lan-connect' if age.total_seconds() < 120
+                     else 'mdi:lan-disconnect' }}
+                icon_color: >-
+                  {% set age = now() - states[entity].last_reported %}
+                  {{ 'green' if age.total_seconds() < 120 else 'red' }}
+                content: >-
+                  {% set age = now() - states[entity].last_reported %}
+                  {{ 'Live' if age.total_seconds() < 120 else 'No data' }}
+
+          # ── The backup pump ran ────────────────────────────────────────────
+          #
+          # Context, not an alarm. Alarming on a backup run is alarming on a
+          # symptom: the controller self-tests the backup ~3x/week, so it would
+          # cry wolf ~150 times a year.
+          #
+          # An earlier version of this card tried to separate a self-test from a
+          # real run by duration, on the grounds that both observed self-tests
+          # lasted exactly 10.0 s. **That rule is false.** The float-lift
+          # capture (`pit_test.pcap`) contains a genuine, float-driven backup
+          # run that also lasted exactly 10.0 s, alongside one of 12.2 s. 10.0 s
+          # is the backup's *minimum* run, not a test signature, and the rule
+          # would have labelled a real emergency a routine test -- the one
+          # direction that must never fail.
+          #
+          # What the same capture does show is that `motor_fail` fires for real:
+          # holding the floats up produced five of them. And it fired after a
+          # primary run that failed to clear the water, which suggests the
+          # controller's check is behavioural -- did the level drop? -- so it
+          # should also catch a primary that runs but is outrun by inflow.
+          #
+          # So classification is left entirely to the device: if it reports a
+          # failure or an outage, the alerts above fire. If it reports neither,
+          # this card says so plainly rather than guessing. See #15.
+          - type: conditional
+            conditions:
+              - condition: state
+                entity: sensor.pumpspy_your_device_id_last_pump
+                state: backup
+            card:
+              type: custom:mushroom-template-card
+              entity: event.pumpspy_your_device_id_pump_run
+              multiline_secondary: true
+              primary: >-
+                {% set explained = is_state('binary_sensor.pumpspy_your_device_id_pump_failure', 'on')
+                   or is_state('binary_sensor.pumpspy_your_device_id_mains_power', 'off') %}
+                {{ 'Backup ran — see the alert above' if explained
+                   else 'Backup ran — no fault reported' }}
+              secondary: >-
+                {% set d = states('sensor.pumpspy_your_device_id_last_run_duration') | float(-1) %}
+                {% set t = states('event.pumpspy_your_device_id_pump_run') | as_datetime %}
+                {% set explained = is_state('binary_sensor.pumpspy_your_device_id_pump_failure', 'on')
+                   or is_state('binary_sensor.pumpspy_your_device_id_mains_power', 'off') %}
+                {{ d }} s{% if t %}, {{ relative_time(t) }} ago{% endif %}.
+                {% if explained %}The cause is already reported above.
+                {% else %}The controller reports no pump failure and no power
+                loss, so this is most likely one of its own weekly self-tests.
+                Run length cannot confirm that — a real backup run has been
+                observed at exactly 10.0 s too.{% endif %}
+              icon: >-
+                {% set explained = is_state('binary_sensor.pumpspy_your_device_id_pump_failure', 'on')
+                   or is_state('binary_sensor.pumpspy_your_device_id_mains_power', 'off') %}
+                {{ 'mdi:information-outline' if explained
+                   else 'mdi:clipboard-check-outline' }}
+              icon_color: grey
+
+          # Mushroom-free fallback. Delete the chips card above and uncomment
+          # this if you do not want the HACS dependency.
+          #
+          # - type: horizontal-stack
+          #   cards:
+          #     - type: tile
+          #       entity: binary_sensor.pumpspy_your_device_id_mains_power
+          #     - type: tile
+          #       entity: binary_sensor.pumpspy_your_device_id_high_water
+          #     - type: tile
+          #       entity: binary_sensor.pumpspy_your_device_id_pump_failure
+
+          # The device latches a pump failure and never clears it itself, so
+          # clearing it is a deliberate act. Hidden until there is one to clear.
+          - type: conditional
+            conditions:
+              - condition: state
+                entity: binary_sensor.pumpspy_your_device_id_pump_failure
+                state: "on"
+            card:
+              type: button
+              entity: button.pumpspy_your_device_id_clear_pump_failure
+              name: Clear pump failure
+              icon: mdi:alert-remove
+
+      # ── Battery health ────────────────────────────────────────────────────
+      - type: grid
+        cards:
+          - type: heading
+            heading: Backup battery
+            heading_style: subtitle
+            badges:
+              - type: entity
+                entity: sensor.pumpspy_your_device_id_battery_voltage
+
+          # The pair is the signal, not either number alone. A tired battery
+          # rests at a perfectly healthy voltage and then collapses the moment
+          # the backup pump pulls current -- a real run at 5.9 A took 13.3 V
+          # down to 12.6 V. Resting voltage on its own tells you almost
+          # nothing, which is why both are here side by side.
+          - type: horizontal-stack
+            cards:
+              - type: tile
+                entity: sensor.pumpspy_your_device_id_battery_voltage
+                name: Resting
+                features:
+                  - type: trend-graph
+                    hours_to_show: 24
+              - type: tile
+                entity: sensor.pumpspy_your_device_id_battery_voltage_under_load
+                name: Under load
+                # Only updates when the backup actually runs, so this reading
+                # is usually hours or days old. That is expected.
+
+          # The names must be overridden here. Left alone, the legend shows the
+          # full entity names -- "PumpSpy 123456789012345 Battery Voltage" and
+          # "PumpSpy 123456789012345 Battery Voltage Under Load" -- which are
+          # identical for the first 38 characters, so the legend truncates away
+          # the only part that distinguishes them and the two series look like
+          # the same thing twice. Put the distinguishing word first.
+          - type: history-graph
+            title: Resting vs under load
+            hours_to_show: 168
+            entities:
+              - entity: sensor.pumpspy_your_device_id_battery_voltage
+                name: Resting
+              - entity: sensor.pumpspy_your_device_id_battery_voltage_under_load
+                name: Under load
+
+      # ── Activity ──────────────────────────────────────────────────────────
+      - type: grid
+        cards:
+          - type: heading
+            heading: Activity
+            heading_style: subtitle
+
+          - type: entities
+            title: Last run
+            entities:
+              - entity: sensor.pumpspy_your_device_id_last_pump
+                name: Pump
+              - entity: sensor.pumpspy_your_device_id_last_run_duration
+                name: Duration
+              - entity: sensor.pumpspy_your_device_id_last_run_estimated_gallons
+                name: Estimated gallons
+              - entity: sensor.pumpspy_your_device_id_last_run_current
+                name: Current draw
+              - entity: event.pumpspy_your_device_id_pump_run
+                name: When
+
+          - type: horizontal-stack
+            cards:
+              - type: tile
+                entity: sensor.pumpspy_your_device_id_primary_runs_today
+                name: Primary runs
+              - type: tile
+                entity: sensor.pumpspy_your_device_id_backup_runs_today
+                name: Backup runs
+
+          - type: horizontal-stack
+            cards:
+              - type: tile
+                entity: sensor.pumpspy_your_device_id_primary_estimated_gallons_today
+                name: Primary gallons
+              - type: tile
+                entity: sensor.pumpspy_your_device_id_backup_estimated_gallons_today
+                name: Backup gallons
+
+          # The totals carry state_class TOTAL_INCREASING, so long-term
+          # statistics keep them for years. `change` turns the running total
+          # back into runs-per-day, which is the shape that shows a wet spring
+          # or a pump starting to short-cycle.
+          - type: statistics-graph
+            title: Runs per day
+            chart_type: bar
+            period: day
+            days_to_show: 60
+            stat_types:
+              - change
+            entities:
+              - entity: sensor.pumpspy_your_device_id_primary_runs_total
+                name: Primary
+              - entity: sensor.pumpspy_your_device_id_backup_runs_total
+                name: Backup
+
+      # ── Diagnostics ───────────────────────────────────────────────────────
+      # Below the fold on purpose: useful when something is wrong, noise
+      # otherwise.
+      - type: grid
+        cards:
+          - type: heading
+            heading: Diagnostics
+            heading_style: subtitle
+
+          - type: entities
+            entities:
+              - entity: sensor.pumpspy_your_device_id_wifi_signal
+                name: Wi-Fi signal
+              - entity: binary_sensor.pumpspy_your_device_id_firmware_update
+                name: Firmware update offered
+              - entity: sensor.pumpspy_your_device_id_primary_runs_total
+                name: Primary runs, all time
+              - entity: sensor.pumpspy_your_device_id_backup_runs_total
+                name: Backup runs, all time
+              - entity: sensor.pumpspy_your_device_id_primary_estimated_gallons_total
+                name: Primary gallons, all time
+              - entity: sensor.pumpspy_your_device_id_backup_estimated_gallons_total
+                name: Backup gallons, all time
+
+          # Firmware is quarantined by default: the vendor is told there is no
+          # update until you say otherwise. This is how you say otherwise.
+          - type: conditional
+            conditions:
+              - condition: state
+                entity: binary_sensor.pumpspy_your_device_id_firmware_update
+                state: "on"
+            card:
+              type: button
+              entity: button.pumpspy_your_device_id_approve_firmware_update
+              name: Approve firmware update
+              icon: mdi:cloud-download
