@@ -231,21 +231,27 @@ views:
               # "Monitoring alive" is not one of our entities and cannot be:
               # every part of this chain fails silently, and a stale reading
               # looks exactly like a calm sump. So it is derived from how long
-              # ago the device last reported. It reports every few seconds, so
-              # anything past a couple of minutes means the chain is broken --
-              # the device, the redirect, or this integration.
+              # ago the device last reported.
+              #
+              # The threshold is 7 minutes, and it is measured rather than
+              # guessed. Telemetry arrives every 2 minutes, so a 2-minute
+              # threshold sits exactly on the cadence and flickers between
+              # "Live" and "No data" forever. Worse, after Home Assistant
+              # restarts the device took over 7 minutes to resume -- it appears
+              # to back off once it has been refused -- so anything tighter
+              # cries wolf on every restart.
               - type: template
                 entity: sensor.pumpspy_your_device_id_battery_voltage
                 icon: >-
                   {% set age = now() - states[entity].last_reported %}
-                  {{ 'mdi:lan-connect' if age.total_seconds() < 120
+                  {{ 'mdi:lan-connect' if age.total_seconds() < 420
                      else 'mdi:lan-disconnect' }}
                 icon_color: >-
                   {% set age = now() - states[entity].last_reported %}
-                  {{ 'green' if age.total_seconds() < 120 else 'red' }}
+                  {{ 'green' if age.total_seconds() < 420 else 'red' }}
                 content: >-
                   {% set age = now() - states[entity].last_reported %}
-                  {{ 'Live' if age.total_seconds() < 120 else 'No data' }}
+                  {{ 'Live' if age.total_seconds() < 420 else 'No data' }}
 
           # ── The backup pump ran ────────────────────────────────────────────
           #
