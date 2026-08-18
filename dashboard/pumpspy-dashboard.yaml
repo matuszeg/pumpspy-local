@@ -411,6 +411,13 @@ views:
                 name: Duration
               - entity: sensor.pumpspy_your_device_id_last_run_estimated_gallons
                 name: Estimated gallons
+              # Treat as indicative only. Two manual self-tests, identical
+              # in every observable respect -- same 10.0s duration, same water
+              # level, same resting voltage -- reported 5.54 A and 11.83 A.
+              # It reads like a single instantaneous sample landing at
+              # different points in the run rather than an average, so do not
+              # build anything on the figure. The battery sag beside it is the
+              # measurement that behaves consistently.
               - entity: sensor.pumpspy_your_device_id_last_run_current
                 name: Current draw
               - entity: event.pumpspy_your_device_id_pump_run
