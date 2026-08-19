@@ -20,12 +20,18 @@ Other Home Assistant integrations for these pumps authenticate to the vendor's c
 
 ## How it works
 
-1. A DNS redirect on your network points the device's reporting hostname at the machine running `pumpspy-local` — a rewrite in AdGuard Home or Pi-hole, or a DNS setting on an isolated VLAN.
+1. Your network sends the device's reporting traffic to the machine running `pumpspy-local` instead of to the vendor — a redirect on your router, or a DNS rewrite if your device will re-resolve. The [setup guide](docs/setup.md) covers both, and why the redirect is usually the one that actually works.
 2. `pumpspy-local` receives the device's HTTP telemetry and:
    - creates Home Assistant entities from it automatically, and
    - forwards the original requests upstream to the vendor, unmodified.
 
 Nothing is installed on the device. Its firmware is never modified.
+
+### One consequence, stated plainly
+
+Once the device's traffic goes through Home Assistant, **the vendor's own alerting depends on Home Assistant being up** — it did not before. The device does not buffer: it retries three times, then drops the event for good.
+
+If you rely on those cloud alerts as a flood safety net, run the [fail-open shim](docs/fail-open-shim.md) as well. It is a small nginx config that tries Home Assistant first and falls back to the vendor automatically. On the reference install it took the cost of a Home Assistant restart from more than seven minutes of lost vendor delivery down to zero.
 
 ## Sensors
 
@@ -42,15 +48,16 @@ Nothing is installed on the device. Its firmware is never modified.
 - Real-time updates, as the device reports
 - Firmware update **capture and hold-for-approval** — new firmware can be quarantined for your review instead of installing silently (opt-in, off by default)
 - Installs through HACS, and works on Home Assistant OS, Supervised, Container, and Core
+- An optional [dashboard](dashboard/) built for the one question that matters at 2 a.m. — is the pit being kept dry, and will the backup work if it is needed
 
 ## Requirements
 
-- [HACS](https://hacs.xyz/) for installation
-- The ability to override DNS for the device on your network
+- [HACS](https://hacs.xyz/) for installation, or copy the integration in by hand
+- A way to make the device's traffic reach Home Assistant: a router that can redirect it, or DNS you control *and* a device that will re-resolve. This is the one requirement that depends on your network — see the [setup guide](docs/setup.md)
 
 ## Status
 
-Early development. The device protocol has been decoded and verified against real hardware; implementation is in progress.
+Working, and running against real hardware. The protocol was decoded from packet captures rather than guessed at, and the integration, firmware quarantine, the dashboard and the fail-open shim are all in daily use on a real pump. Expect rough edges in setup rather than in operation: getting the device's traffic to Home Assistant is the part that varies most between networks.
 
 ## Disclaimer
 

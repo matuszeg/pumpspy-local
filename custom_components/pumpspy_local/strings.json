@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "pumpspy-local",
-        "description": "Point your DNS rewrite for www.pumpspy.com at this machine, then set the port the device reports to and where its traffic should be forwarded.",
+        "description": "Send the device's traffic for www.pumpspy.com to this machine -- a redirect on your router, or a DNS rewrite if your device will re-resolve -- then set the port it reports to and where that traffic should be forwarded.",
         "data": {
           "port": "Listen port",
           "upstream": "Forward to",
@@ -16,7 +16,7 @@
         "data_description": {
           "port": "The port the device posts to. Leave at 8081 unless you know otherwise.",
           "upstream": "Where the device's traffic is relayed so the vendor app keeps working.",
-          "nameserver": "Your DNS rewrite answers for this machine too, so looking up the vendor normally points Home Assistant back at itself. This resolver is asked instead, and must be one the rewrite is not installed in.",
+          "nameserver": "If you redirect by DNS, your rewrite answers for this machine too, so looking up the vendor normally would point Home Assistant back at itself. This resolver is asked instead, and must be one the rewrite is not installed in.",
           "upstream_ip": "Leave blank unless the lookup above cannot work -- outbound DNS blocked, for example. Set it and the vendor is contacted at this address directly, with no lookup at all.",
           "flow_rate": "Used to estimate gallons from how long a pump ran. The device does not report volume, so this is an estimate; 1.0 matches the vendor's own figure.",
           "firmware_policy": "Observe only watches and tells you. Quarantine holds an update back until you approve it, which is the one place this integration changes what your device receives.",
