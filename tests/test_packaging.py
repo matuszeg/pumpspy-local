@@ -67,3 +67,25 @@ def test_the_brand_icons_are_the_size_brands_demands(name: str, expected: int) -
 def test_the_brand_icons_were_rendered_from_the_svg_that_is_committed() -> None:
     """The SVG is the master. A PNG edited by hand would silently drift from it."""
     assert (BRANDS / "icon.svg").exists()
+
+
+def _every_string(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [s for v in value.values() for s in _every_string(v)]
+    if isinstance(value, list):
+        return [s for v in value for s in _every_string(v)]
+    return []
+
+
+@pytest.mark.parametrize("name", ["strings.json", "translations/en.json"])
+def test_no_translated_string_contains_a_url(name: str) -> None:
+    """hassfest rejects these outright, and it is right to.
+
+    A hostname baked into a translated string cannot be localised and cannot be
+    corrected without a release. This caught a real one: the setup dialog named
+    the vendor's host, which was also the least useful half of the sentence.
+    """
+    for value in _every_string(_json(COMPONENT / name)):
+        assert not re.search(r"https?://|www\.\S", value), value
