@@ -28,16 +28,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: hacs/action@main
         env:
-          # Without this the action reads the repository unauthenticated, which
-          # returns nothing at all while the repository is private, and every
-          # file check fails with "expected a dictionary. Got None".
+          # Keeps the action's GitHub API calls authenticated. Without it they
+          # are anonymous, which is rate limited, and which returned nothing at
+          # all back when this repository was private: every file check failed
+          # with "expected a dictionary. Got None".
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           category: integration
-          # The brands check looks for this domain in home-assistant/brands.
-          # Remove this line once the brands pull request is merged -- it is the
-          # last thing standing between here and the HACS default store.
-          ignore: brands
 
   tests:
     name: tests

@@ -17,7 +17,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 COMPONENT = ROOT / "custom_components" / "pumpspy_local"
-BRANDS = ROOT / "brands"
+BRAND = COMPONENT / "brand"
 
 
 def _json(path: Path) -> dict:
@@ -59,14 +59,25 @@ def _png_size(path: Path) -> tuple[int, int]:
 
 
 @pytest.mark.parametrize(("name", "expected"), [("icon.png", 256), ("icon@2x.png", 512)])
-def test_the_brand_icons_are_the_size_brands_demands(name: str, expected: int) -> None:
-    """home-assistant/brands rejects anything else, and only says so on review."""
-    assert _png_size(BRANDS / name) == (expected, expected)
+def test_the_brand_icons_are_the_expected_size(name: str, expected: int) -> None:
+    """Home Assistant serves these directly, so a wrong size ships to users.
+
+    Since 2026.3 a custom integration carries its own brand images here rather
+    than having them merged into home-assistant/brands, which means nobody
+    reviews them on the way in. This is the only check they get.
+    """
+    assert _png_size(BRAND / name) == (expected, expected)
+
+
+def test_the_brand_icons_sit_where_home_assistant_looks_for_them() -> None:
+    """Beside manifest.json, in `brand/`. Anywhere else is silently ignored."""
+    assert BRAND.parent == COMPONENT
+    assert (COMPONENT / "manifest.json").exists()
 
 
 def test_the_brand_icons_were_rendered_from_the_svg_that_is_committed() -> None:
     """The SVG is the master. A PNG edited by hand would silently drift from it."""
-    assert (BRANDS / "icon.svg").exists()
+    assert (ROOT / "design" / "icon.svg").exists()
 
 
 def _every_string(value: object) -> list[str]:
