@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256"
+     role="img" aria-label="pumpspy-local">
+  <title>pumpspy-local</title>
+  <desc>
+    A sump pit in cross section: water in the bottom, the pump sitting in it, and
+    the discharge line carrying the water away over the rim.
+
+    Three things here were arrived at by drawing the alternative and watching it
+    fail at the size this is actually read, which is about 48 pixels, in Home
+    Assistant's integrations list. None of them are style choices.
+
+    The discharge stops short of the rim and elbows away above it. A pipe run
+    full height turns the icon into a "W": three verticals of equal length stop
+    reading as an object and start reading as a glyph.
+
+    The pit is shallow rather than deep. A deeper pit puts the elbow alongside
+    the rim, and at 48 pixels two strokes that close merge into one blob.
+
+    Everything is mid-toned on a transparent ground. Home Assistant renders this
+    on light and dark themes both, so anything near-white or near-black would
+    have to pick one and lose on the other. Slate and blue hold on either.
+  </desc>
+
+  <defs>
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4FB3E8"/>
+      <stop offset="1" stop-color="#1F6FA8"/>
+    </linearGradient>
+    <clipPath id="pit">
+      <path d="M40 72 L40 180 Q40 226 88 226 L168 226 Q216 226 216 180 L216 72 Z"/>
+    </clipPath>
+  </defs>
+
+  <!-- The waterline is a shallow wave. Ruled flat, it read as a progress bar. -->
+  <g clip-path="url(#pit)">
+    <path d="M26 158 C 58 146, 90 146, 122 158 S 186 170, 226 158 L226 246 L26 246 Z"
+          fill="url(#water)"/>
+    <path d="M26 158 C 58 146, 90 146, 122 158 S 186 170, 226 158"
+          fill="none" stroke="#8FDCFA" stroke-width="6"/>
+  </g>
+
+  <path d="M128 168 V56 Q128 32 152 32 H242" fill="none" stroke="#6E8DA6"
+        stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="94" y="158" width="70" height="54" rx="14" fill="#6E8DA6"/>
+
+  <!-- Open at the top: a real pit's lid is not part of its silhouette. -->
+  <path d="M40 66 L40 180 Q40 226 88 226 L168 226 Q216 226 216 180 L216 66"
+        fill="none" stroke="#6E8DA6" stroke-width="22" stroke-linecap="round"/>
+</svg>
