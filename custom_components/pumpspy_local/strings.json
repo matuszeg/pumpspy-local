@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "pumpspy-local",
-        "description": "Send the device's traffic for www.pumpspy.com to this machine -- a redirect on your router, or a DNS rewrite if your device will re-resolve -- then set the port it reports to and where that traffic should be forwarded.",
+        "description": "Send the device's reporting traffic to this machine -- a redirect on your router, or a DNS rewrite if your device will re-resolve -- then set the port it reports to and where that traffic should be forwarded.",
         "data": {
           "port": "Listen port",
           "upstream": "Forward to",
