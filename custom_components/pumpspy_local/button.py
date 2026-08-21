@@ -35,8 +35,10 @@ async def async_setup_entry(
     def _add(device: DeviceState) -> None:
         async_add_entities(
             [
-                ClearPumpFailure(device, DESCRIPTION, runtime),
-                ApproveFirmwareUpdate(device, APPROVE_DESCRIPTION, runtime),
+                ClearPumpFailure(device, DESCRIPTION, runtime, entry.entry_id),
+                ApproveFirmwareUpdate(
+                    device, APPROVE_DESCRIPTION, runtime, entry.entry_id
+                ),
             ]
         )
 
@@ -49,8 +51,8 @@ async def async_setup_entry(
 class ClearPumpFailure(PumpspyEntity, ButtonEntity):
     """Clears the latched pump fault."""
 
-    def __init__(self, device: DeviceState, description, runtime) -> None:
-        super().__init__(device, description)
+    def __init__(self, device: DeviceState, description, runtime, entry_id) -> None:
+        super().__init__(device, description, entry_id)
         self._runtime = runtime
 
     async def async_press(self) -> None:
@@ -76,8 +78,8 @@ class ApproveFirmwareUpdate(PumpspyEntity, ButtonEntity):
     pressing this does nothing.
     """
 
-    def __init__(self, device: DeviceState, description, runtime) -> None:
-        super().__init__(device, description)
+    def __init__(self, device: DeviceState, description, runtime, entry_id) -> None:
+        super().__init__(device, description, entry_id)
         self._runtime = runtime
 
     async def async_press(self) -> None:

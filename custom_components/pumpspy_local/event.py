@@ -31,7 +31,7 @@ async def async_setup_entry(
 
     @callback
     def _add(device: DeviceState) -> None:
-        async_add_entities([PumpRunEvent(device, DESCRIPTION)])
+        async_add_entities([PumpRunEvent(device, DESCRIPTION, entry.entry_id)])
 
     for device in runtime.devices.values():
         _add(device)

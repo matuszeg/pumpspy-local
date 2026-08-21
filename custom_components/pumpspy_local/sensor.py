@@ -188,7 +188,8 @@ async def async_setup_entry(
     @callback
     def _add(device: DeviceState) -> None:
         async_add_entities(
-            PumpspySensor(device, description) for description in SENSORS
+            PumpspySensor(device, description, entry.entry_id)
+            for description in SENSORS
         )
 
     # A device may already have reported before this platform finished loading.

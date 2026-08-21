@@ -3,6 +3,10 @@
 DOMAIN = "pumpspy_local"
 
 MANUFACTURER = "Richtech"
+
+# The integration's own device, which the vendor-reachability sensor belongs to
+# and the pumps hang off. Not hardware, so it has no manufacturer.
+SERVICE_DEVICE_NAME = "PumpSpy Local"
 MODEL = "PumpSpy / PitBoss+"
 
 CONF_PORT = "port"
@@ -27,6 +31,11 @@ DEFAULT_CHECK_INTERVAL_HOURS = 24
 
 # Fired when the vendor offers an update.
 SIGNAL_FIRMWARE = f"{DOMAIN}_firmware"
+
+# Fired after every forward attempt, with the config entry id. Carries no
+# payload of its own: what changed is the running verdict on the vendor, which
+# the entity reads back out of the runtime.
+SIGNAL_VENDOR = f"{DOMAIN}_vendor"
 
 # The port the device reports to, and the vendor it reports to. Both are what a
 # real installation needs; a development instance must point upstream somewhere

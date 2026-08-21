@@ -14,6 +14,7 @@ from aiohttp import ClientError, ClientSession, web
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
@@ -31,8 +32,10 @@ from .const import (
     DOMAIN,
     FIRMWARE_PATH,
     POLICY_QUARANTINE,
+    SERVICE_DEVICE_NAME,
     SIGNAL_FIRMWARE,
     SIGNAL_NEW_DEVICE,
+    SIGNAL_VENDOR,
     signal_device_update,
     signal_pump_run,
 )
@@ -47,6 +50,7 @@ from .core.upstream import (
     UpstreamUnavailable,
     aiodns_resolver,
 )
+from .core.vendor import VendorHealth
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -94,6 +98,9 @@ class PumpspyRuntime:
     # Ours, not Home Assistant's shared one, so unload has to close it.
     session: ClientSession | None = None
     devices: dict[str, DeviceState] = field(default_factory=dict)
+    # One verdict per entry, not per device: the vendor is reached over one
+    # connection regardless of how many devices report through it.
+    vendor: VendorHealth = field(default_factory=VendorHealth)
     flow_rate: float = DEFAULT_FLOW_RATE
     check_interval: timedelta = timedelta(hours=DEFAULT_CHECK_INTERVAL_HOURS)
     # Keyed by device id: the endpoint is /new_firmware/<id>, so two devices
@@ -164,6 +171,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime
 
+    # Registered here rather than left to the entity that lives on it, because
+    # the pumps name it as their via_device. A device pointing at one Home
+    # Assistant has not seen yet silently loses the link -- and on a restart
+    # every pump entity is built from restored state before any message
+    # arrives, with the platforms set up concurrently, so it would be a race.
+    dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, entry.entry_id)},
+        entry_type=dr.DeviceEntryType.SERVICE,
+        name=SERVICE_DEVICE_NAME,
+    )
+
     # Restore what the device only tells us when it changes. Without this a
     # restart leaves the alarms reading unknown until the next real event.
     for device_id, stored in (await store.async_load() or {}).get("devices", {}).items():
@@ -215,12 +234,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         """
         try:
             target = await upstream_address.target(dt_util.utcnow())
-            return await forward(session, target, proxied)
+            response = await forward(session, target, proxied)
         except UpstreamUnavailable as err:
             # A configuration problem, not a passing outage -- say so loudly.
             _LOGGER.error("not forwarding: %s", err)
+            runtime.vendor.record_failure(str(err))
         except ClientError as err:
             _LOGGER.warning("could not reach the vendor: %s", err)
+            runtime.vendor.record_failure(str(err))
+        else:
+            runtime.vendor.record_success(dt_util.utcnow())
+            async_dispatcher_send(hass, SIGNAL_VENDOR, entry.entry_id)
+            return response
+
+        async_dispatcher_send(hass, SIGNAL_VENDOR, entry.entry_id)
         return None
 
     async def _handle_firmware_check(proxied: ProxyRequest) -> web.Response:

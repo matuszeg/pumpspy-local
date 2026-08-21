@@ -16,6 +16,7 @@ from homeassistant.helpers import device_registry as dr
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.pumpspy_local.const import DOMAIN
+from custom_components.pumpspy_local.core.state import DeviceState
 
 
 @pytest.fixture(autouse=True)
@@ -654,3 +655,141 @@ async def test_unloading_closes_the_upstream_session(hass, upstream, free_port):
     await hass.config_entries.async_unload(entry.entry_id)
 
     assert session.closed
+
+
+VENDOR_SENSOR = "binary_sensor.pumpspy_local_vendor_reachable"
+
+
+async def test_the_vendor_sensor_exists_before_any_device_has_reported(
+    hass, upstream, free_port
+):
+    """It is needed most when nothing is reporting, so it cannot wait for one.
+
+    Every other entity is created when a device first shows up. This one
+    belongs to the connection, not the pump, and the moment a user reaches for
+    it is precisely the moment no device has said anything.
+    """
+    await _setup(hass, upstream, free_port)
+
+    assert hass.states.get(VENDOR_SENSOR).state == "unknown"
+
+
+async def test_the_vendor_sensor_hangs_off_its_own_device(hass, upstream, free_port):
+    """Reachability is a fact about the connection, not about a pump.
+
+    Hanging it on the pump would also duplicate it once per device, all of them
+    reporting the same thing.
+    """
+    entry = await _setup(hass, upstream, free_port)
+
+    device = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, entry.entry_id)})
+    assert device is not None
+    assert device.name == "PumpSpy Local"
+
+
+async def test_one_delivery_says_the_vendor_is_reachable(hass, upstream, free_port):
+    await _setup(hass, upstream, free_port)
+
+    async with ClientSession() as session:
+        async with session.post(f"http://127.0.0.1:{free_port}/pings", data=b"{}"):
+            pass
+    await hass.async_block_till_done()
+
+    assert hass.states.get(VENDOR_SENSOR).state == "on"
+
+
+async def test_a_run_of_failed_forwards_says_the_vendor_is_down(hass, free_port):
+    """Four in a row, which is more than a healthy day has ever produced."""
+    await _setup_pointing_at(hass, DEAD_UPSTREAM, free_port)
+
+    async with ClientSession() as session:
+        for _ in range(4):
+            async with session.post(
+                f"http://127.0.0.1:{free_port}/pings", data=b"{}"
+            ):
+                pass
+    await hass.async_block_till_done()
+
+    state = hass.states.get(VENDOR_SENSOR)
+    assert state.state == "off"
+    assert state.attributes["consecutive_failures"] == 4
+
+
+async def test_a_couple_of_failed_forwards_does_not(hass, free_port):
+    """The vendor hangs up on about one request in ten while perfectly healthy."""
+    await _setup_pointing_at(hass, DEAD_UPSTREAM, free_port)
+
+    async with ClientSession() as session:
+        for _ in range(2):
+            async with session.post(
+                f"http://127.0.0.1:{free_port}/pings", data=b"{}"
+            ):
+                pass
+    await hass.async_block_till_done()
+
+    assert hass.states.get(VENDOR_SENSOR).state == "unknown"
+
+
+async def test_the_pump_hangs_off_the_service_device(hass, upstream, free_port):
+    """So the device page reads as one integration rather than two strangers."""
+    entry = await _setup(hass, upstream, free_port)
+    body = (Path(__file__).parent / "fixtures" / "bbs_json_plain_battery.txt").read_bytes()
+
+    async with ClientSession() as session:
+        async with session.post(f"http://127.0.0.1:{free_port}/bbs_json", data=body):
+            pass
+    await hass.async_block_till_done()
+
+    registry = dr.async_get(hass)
+    service = registry.async_get_device(identifiers={(DOMAIN, entry.entry_id)})
+    pump = registry.async_get_device(identifiers={(DOMAIN, "11111111111111")})
+    assert pump.via_device_id == service.id
+
+
+async def test_a_restored_pump_still_hangs_off_the_service_device(
+    hass, upstream, free_port, hass_storage
+):
+    """The ordering that actually happens on a restart, not on first contact.
+
+    A live install restores its device from storage, so every pump entity is
+    created during setup, before any message arrives -- and the platforms are
+    set up concurrently. If the service device is only created by the entity
+    that references it, the pump can be registered first and its link comes out
+    empty on exactly the path every real restart takes.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"port": free_port, "upstream": f"http://{upstream.host}:{upstream.port}"},
+    )
+    entry.add_to_hass(hass)
+    hass_storage[f"{DOMAIN}.{entry.entry_id}"] = {
+        "version": 1,
+        "data": {"devices": {"11111111111111": DeviceState("11111111111111").to_stored()}},
+    }
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    registry = dr.async_get(hass)
+    service = registry.async_get_device(identifiers={(DOMAIN, entry.entry_id)})
+    pump = registry.async_get_device(identifiers={(DOMAIN, "11111111111111")})
+    assert service is not None
+    assert pump.via_device_id == service.id
+
+
+async def test_the_service_device_is_registered_before_any_platform(
+    hass, upstream, free_port
+):
+    """It has to exist before anything can name it as a via_device.
+
+    Leaving it to the entity that lives on it works only while the binary
+    sensor platform happens to win the race against the other three. Setting up
+    with no platforms at all is the only way to assert that independently of
+    which order they run in.
+    """
+    with patch("custom_components.pumpspy_local.PLATFORMS", []):
+        entry = await _setup(hass, upstream, free_port)
+
+    device = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, entry.entry_id)})
+    assert device is not None
+    assert device.name == "PumpSpy Local"

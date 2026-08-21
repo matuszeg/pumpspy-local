@@ -16,7 +16,12 @@ class PumpspyEntity(Entity):
     _attr_has_entity_name = True
     _attr_should_poll = False
 
-    def __init__(self, device: DeviceState, description: EntityDescription) -> None:
+    def __init__(
+        self,
+        device: DeviceState,
+        description: EntityDescription,
+        entry_id: str,
+    ) -> None:
         self._device = device
         self.entity_description = description
         self._attr_unique_id = f"{device.device_id}_{description.key}"
@@ -25,6 +30,9 @@ class PumpspyEntity(Entity):
             manufacturer=MANUFACTURER,
             model=MODEL,
             name=f"PumpSpy {device.device_id}",
+            # The service device the config entry itself owns. Without this the
+            # pump and the integration show up as two unrelated devices.
+            via_device=(DOMAIN, entry_id),
         )
 
     async def async_added_to_hass(self) -> None:
