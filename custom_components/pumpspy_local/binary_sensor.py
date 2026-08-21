@@ -20,6 +20,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import (
     DOMAIN,
     SERVICE_DEVICE_NAME,
+    VENDOR_ENTITY_NAME,
     SIGNAL_FIRMWARE,
     SIGNAL_NEW_DEVICE,
     SIGNAL_VENDOR,
@@ -162,7 +163,7 @@ class VendorReachable(BinarySensorEntity):
     _attr_should_poll = False
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_name = "Vendor reachable"
+    _attr_name = VENDOR_ENTITY_NAME
 
     def __init__(self, entry: ConfigEntry, runtime) -> None:
         self._runtime = runtime

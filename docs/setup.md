@@ -121,6 +121,110 @@ falling back to the vendor, firmware polls are not filtered. Quarantine is
 best-effort by nature — any window where the redirect is not in force is a
 window where the device can reach the vendor directly.
 
+## 6. Know *why* the monitoring went quiet
+
+Every part of this chain fails silently, and a stale entity looks exactly like a
+calm sump. So it is worth alerting on silence — but the alert is only useful if
+it names the right cause, and there are two very different ones.
+
+The integration creates **`binary_sensor.pumpspy_local_vendor_reachable`**, which
+says whether the requests being forwarded are actually reaching PumpSpy. It goes
+*off* after four consecutive failed forwards and back *on* after two consecutive
+successes; those numbers are measured, not chosen, and they keep the routine
+hiccup (the vendor drops roughly one request in ten while perfectly healthy) from
+flipping it. It reads *unknown* until something has been forwarded at all.
+
+That matters because when PumpSpy's servers stop answering, the device gives up
+and stops reporting to anyone — which from here is indistinguishable from a dead
+redirect, unless you know the vendor was already failing. Attributes on the same
+entity carry `last_delivery` (when a message last got through), the current
+`consecutive_failures` run, and the `last_error`.
+
+An automation that tells the three cases apart:
+
+```yaml
+alias: Sump monitoring has gone quiet
+mode: single
+triggers:
+  - trigger: template
+    id: gone_quiet
+    value_template: >-
+      {% set ns = namespace(newest=0) %}
+      {% for s in states.sensor if s.object_id.startswith('pumpspy_') %}
+      {% set ns.newest = [ns.newest, s.last_reported.timestamp()] | max %}
+      {% endfor %}
+      {{ ns.newest > 0 and (now().timestamp() - ns.newest) > 1800 }}
+  - trigger: template
+    id: recovered
+    value_template: >-
+      {% set ns = namespace(newest=0) %}
+      {% for s in states.sensor if s.object_id.startswith('pumpspy_') %}
+      {% set ns.newest = [ns.newest, s.last_reported.timestamp()] | max %}
+      {% endfor %}
+      {{ ns.newest > 0 and (now().timestamp() - ns.newest) < 300 }}
+actions:
+  - variables:
+      vendor: binary_sensor.pumpspy_local_vendor_reachable
+  - choose:
+      # PumpSpy is down. Nothing here is broken and nothing needs doing --
+      # except knowing that their alerting is off until they come back.
+      - conditions:
+          - condition: trigger
+            id: gone_quiet
+          - "{{ states(vendor) == 'off' }}"
+        sequence:
+          - action: notify.mobile_app_yourphone
+            data:
+              title: PumpSpy is down, your monitoring is fine
+              message: >-
+                No data for 30 minutes. The last message we delivered to PumpSpy
+                was {{ relative_time(as_datetime(state_attr(vendor, 'last_delivery'))) }}
+                ago, so this is their outage: the device stops reporting to
+                anyone when it cannot reach them. The pump is unaffected, but
+                PumpSpy's own alerts are off until they return.
+      # We can reach PumpSpy but the device has stopped talking to us.
+      - conditions:
+          - condition: trigger
+            id: gone_quiet
+          - "{{ states(vendor) == 'on' }}"
+        sequence:
+          - action: notify.mobile_app_yourphone
+            data:
+              title: Sump monitoring has gone quiet
+              message: >-
+                No data from the device in 30 minutes, and PumpSpy is reachable
+                from here -- so this is the device itself or the redirect, not
+                their servers. The pump is unaffected either way.
+      # Nothing has been forwarded at all, so there is nothing to go on.
+      - conditions:
+          - condition: trigger
+            id: gone_quiet
+        sequence:
+          - action: notify.mobile_app_yourphone
+            data:
+              title: Sump monitoring has gone quiet
+              message: >-
+                No data from the device in 30 minutes, and nothing has been
+                forwarded since Home Assistant started, so the cause is unknown.
+                The pump is unaffected.
+      - conditions:
+          - condition: trigger
+            id: recovered
+        sequence:
+          - action: notify.mobile_app_yourphone
+            data:
+              title: Sump monitoring is back
+              message: The device is reporting again.
+```
+
+Two things to adjust: `notify.mobile_app_yourphone` is whatever your notifier is
+called, and the entity id above assumes the service device still has its default
+name — rename that device and the entity id follows it.
+
+The 30-minute threshold is deliberately loose. Telemetry arrives every two
+minutes, but after a Home Assistant restart the device took over seven minutes
+to resume, so anything tight cries wolf on every restart.
+
 ## Appendix — worked example: UniFi Dream Machine
 
 **This is one router's syntax, not a requirement.** UniFi has no interface for

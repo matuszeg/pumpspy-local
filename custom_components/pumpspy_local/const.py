@@ -7,6 +7,11 @@ MANUFACTURER = "Richtech"
 # The integration's own device, which the vendor-reachability sensor belongs to
 # and the pumps hang off. Not hardware, so it has no manufacturer.
 SERVICE_DEVICE_NAME = "PumpSpy Local"
+
+# Together with the device name this is what Home Assistant slugifies into the
+# sensor's entity id, which the documented automation names. Kept here so the
+# two cannot drift apart quietly.
+VENDOR_ENTITY_NAME = "Vendor reachable"
 MODEL = "PumpSpy / PitBoss+"
 
 CONF_PORT = "port"
