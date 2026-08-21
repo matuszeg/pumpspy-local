@@ -1,0 +1,46 @@
+name: Validate
+
+# Runs the same checks HACS and Home Assistant run against this repository, so a
+# packaging mistake shows up here rather than in someone else's failed install.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Both actions track moving targets. A weekly run catches a rule that
+    # tightened upstream while nothing here changed.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  hassfest:
+    name: hassfest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: home-assistant/actions/hassfest@master
+
+  hacs:
+    name: HACS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hacs/action@main
+        with:
+          category: integration
+          # The brands check looks for this domain in home-assistant/brands.
+          # Remove this line once the brands pull request is merged -- it is the
+          # last thing standing between here and the HACS default store.
+          ignore: brands
+
+  tests:
+    name: tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -r requirements-dev.txt
+      - run: python -m pytest -q

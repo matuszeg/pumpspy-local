@@ -1,5 +1,8 @@
 # pumpspy-local
 
+[![Validate](https://github.com/matuszeg/pumpspy-local/actions/workflows/validate.yml/badge.svg)](https://github.com/matuszeg/pumpspy-local/actions/workflows/validate.yml)
+[![HACS: custom repository](https://img.shields.io/badge/HACS-custom%20repository-41BDF5.svg)](https://hacs.xyz/)
+
 **Local, cloud-free monitoring for PumpSpy and PitBoss+ sump pump battery backup systems, in [Home Assistant](https://www.home-assistant.io/).**
 
 No vendor account. No cloud dependency. No polling delay.
@@ -49,6 +52,26 @@ If you rely on those cloud alerts as a flood safety net, run the [fail-open shim
 - Firmware update **capture and hold-for-approval** — new firmware can be quarantined for your review instead of installing silently (opt-in, off by default)
 - Installs through HACS, and works on Home Assistant OS, Supervised, Container, and Core
 - An optional [dashboard](dashboard/) built for the one question that matters at 2 a.m. — is the pit being kept dry, and will the backup work if it is needed
+
+## Install
+
+### Through HACS
+
+1. In HACS, open the three-dot menu and choose **Custom repositories**.
+2. Add `https://github.com/matuszeg/pumpspy-local`, with category **Integration**.
+3. Find *pumpspy-local* in the HACS list, install it, and restart Home Assistant.
+4. Go to **Settings → Devices & services → Add integration** and search for *pumpspy-local*.
+
+### By hand
+
+Copy `custom_components/pumpspy_local/` into your Home Assistant configuration
+directory, under `custom_components/`, and restart. Then add it from **Settings →
+Devices & services** as above.
+
+Installing it is the easy half. The integration sits there doing nothing until
+the device's traffic actually reaches it, and that part depends on your network
+— see the [setup guide](docs/setup.md), which walks through the options and how
+to tell whether it worked.
 
 ## Requirements
 
