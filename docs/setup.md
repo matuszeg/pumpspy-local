@@ -225,7 +225,7 @@ The 30-minute threshold is deliberately loose. Telemetry arrives every two
 minutes, but after a Home Assistant restart the device took over seven minutes
 to resume, so anything tight cries wolf on every restart.
 
-## When the vendor is unreachable
+### When the vendor is unreachable
 
 The device does not keep reporting into the void. If the vendor's API stops
 answering, it tolerates the failures for a few minutes, then decides its token
