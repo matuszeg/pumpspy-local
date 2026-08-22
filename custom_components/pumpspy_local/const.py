@@ -12,6 +12,10 @@ SERVICE_DEVICE_NAME = "PumpSpy Local"
 # sensor's entity id, which the documented automation names. Kept here so the
 # two cannot drift apart quietly.
 VENDOR_ENTITY_NAME = "Vendor reachable"
+
+# Slugified together with the device name into the entity id, same as the
+# vendor sensor above.
+LOCAL_AUTH_ENTITY_NAME = "Local token issued"
 MODEL = "PumpSpy / PitBoss+"
 
 CONF_PORT = "port"
@@ -28,6 +32,10 @@ CONF_UPSTREAM_IP = "upstream_ip"
 
 # The endpoint the device polls every ~13 seconds.
 FIRMWARE_PATH = "/new_firmware"
+
+# The endpoint the device re-authenticates against, roughly every four hours in
+# normal operation and repeatedly when the vendor stops answering.
+AUTH_PATH = "/oauth/token"
 
 POLICY_OBSERVE = "observe"
 POLICY_QUARANTINE = "quarantine"

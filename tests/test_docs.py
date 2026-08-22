@@ -17,6 +17,7 @@ import yaml
 from homeassistant.util import slugify
 
 from custom_components.pumpspy_local.const import (
+    LOCAL_AUTH_ENTITY_NAME,
     SERVICE_DEVICE_NAME,
     VENDOR_ENTITY_NAME,
 )
@@ -48,3 +49,11 @@ def test_the_example_automation_reads_the_attributes_that_exist():
     text = SETUP.read_text()
     for attribute in ("last_delivery", "consecutive_failures", "last_error"):
         assert attribute in text
+
+
+def test_the_docs_name_the_local_token_sensor_the_integration_creates():
+    expected = (
+        f"binary_sensor.{slugify(SERVICE_DEVICE_NAME)}_"
+        f"{slugify(LOCAL_AUTH_ENTITY_NAME)}"
+    )
+    assert expected in SETUP.read_text()

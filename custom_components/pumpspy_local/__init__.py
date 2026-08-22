@@ -20,6 +20,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    AUTH_PATH,
     CONF_CHECK_INTERVAL_HOURS,
     CONF_FIRMWARE_POLICY,
     CONF_FLOW_RATE,
@@ -39,6 +40,7 @@ from .const import (
     signal_device_update,
     signal_pump_run,
 )
+from .core.auth import AUTH_CONTENT_TYPE, LocalAuth, should_mint
 from .core.forward import ProxyRequest, ProxyResponse, forward, upstream_session
 from .core.firmware import FirmwareChecker, Reply, Verdict, classify
 from .core.gallons import DEFAULT_FLOW_RATE
@@ -101,6 +103,9 @@ class PumpspyRuntime:
     # One verdict per entry, not per device: the vendor is reached over one
     # connection regardless of how many devices report through it.
     vendor: VendorHealth = field(default_factory=VendorHealth)
+    # One per entry, like the vendor verdict: the token is the device's
+    # credential for the vendor, and there is one vendor.
+    local_auth: LocalAuth = field(default_factory=LocalAuth)
     flow_rate: float = DEFAULT_FLOW_RATE
     check_interval: timedelta = timedelta(hours=DEFAULT_CHECK_INTERVAL_HOURS)
     # Keyed by device id: the endpoint is /new_firmware/<id>, so two devices
@@ -289,6 +294,44 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         return web.Response(status=served.status, body=served.body)
 
+    async def _handle_auth(proxied: ProxyRequest) -> web.Response:
+        """Relay the device's token request, or answer it if the vendor cannot.
+
+        Relayed first, always: when the vendor is healthy this path is exactly
+        what it was before. A token is only minted once the vendor has already
+        been judged unreachable, which keeps an outage apart from an account
+        the vendor is deliberately rejecting.
+
+        The body is never touched. It carries the account password in clear
+        text, so it is matched on path alone and forwarded unread.
+        """
+        response = await _relay(proxied)
+        status = response.status if response is not None else None
+
+        if status == 200:
+            # The device is back on a token the vendor issued. _relay already
+            # dispatched SIGNAL_VENDOR once for this request, before this line
+            # ran, so that dispatch carried the stale (still-issued) state --
+            # without a second one here the entity keeps reading "on" until
+            # some unrelated forward happens to dispatch again, which is
+            # exactly the moment recovery is being watched for.
+            runtime.local_auth.clear()
+            async_dispatcher_send(hass, SIGNAL_VENDOR, entry.entry_id)
+        elif should_mint(runtime.vendor.reachable, status):
+            _LOGGER.warning(
+                "vendor unreachable -- answering the device's token request "
+                "locally so it keeps reporting"
+            )
+            body = runtime.local_auth.mint(dt_util.utcnow())
+            async_dispatcher_send(hass, SIGNAL_VENDOR, entry.entry_id)
+            return web.Response(
+                status=200, body=body, headers={"Content-Type": AUTH_CONTENT_TYPE}
+            )
+
+        if response is None:
+            return web.Response(status=502)
+        return web.Response(status=response.status, body=response.body)
+
     async def handle(request: web.Request) -> web.Response:
         proxied = ProxyRequest(
             method=request.method,
@@ -304,6 +347,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         if proxied.path.startswith(FIRMWARE_PATH):
             return await _handle_firmware_check(proxied)
+
+        # Exact match, unlike the firmware path above: that one carries a
+        # device id after it and needs the prefix, this one does not, and a
+        # prefix match would also catch /oauth/tokens or anything else that
+        # happens to start with it. proxied.path is rel_url.path_qs, so a
+        # query string (never seen from the device, but not impossible) is
+        # stripped for the comparison only -- the request relayed below still
+        # carries it, unmodified.
+        if proxied.path.partition("?")[0] == AUTH_PATH:
+            return await _handle_auth(proxied)
 
         response = await _relay(proxied)
 

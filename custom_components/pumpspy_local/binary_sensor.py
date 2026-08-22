@@ -19,6 +19,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
     DOMAIN,
+    LOCAL_AUTH_ENTITY_NAME,
     SERVICE_DEVICE_NAME,
     VENDOR_ENTITY_NAME,
     SIGNAL_FIRMWARE,
@@ -84,9 +85,9 @@ async def async_setup_entry(
 
     entry.async_on_unload(async_dispatcher_connect(hass, SIGNAL_NEW_DEVICE, _add))
 
-    # Added unconditionally, not when a device appears: this is the one entity
-    # that is wanted precisely when no device is reporting.
-    async_add_entities([VendorReachable(entry, runtime)])
+    # Added unconditionally, not when a device appears: these are the entities
+    # that are wanted precisely when no device is reporting.
+    async_add_entities([VendorReachable(entry, runtime), LocallyIssuedToken(entry, runtime)])
 
 
 class PumpspyBinarySensor(PumpspyEntity, BinarySensorEntity):
@@ -195,6 +196,53 @@ class VendorReachable(BinarySensorEntity):
             "consecutive_failures": vendor.consecutive_failures,
             "last_error": vendor.last_error,
         }
+
+    async def async_added_to_hass(self) -> None:
+        self.async_on_remove(
+            async_dispatcher_connect(self.hass, SIGNAL_VENDOR, self._handle_vendor)
+        )
+
+    @callback
+    def _handle_vendor(self, entry_id: str) -> None:
+        if entry_id == self._entry_id:
+            self.async_write_ha_state()
+
+
+class LocallyIssuedToken(BinarySensorEntity):
+    """Whether the device is carrying a token that was minted here.
+
+    On means the vendor was unreachable when the device asked to
+    re-authenticate and it was answered locally, so that it would keep
+    reporting rather than fall silent waiting for an answer that was not
+    coming.
+
+    It matters at recovery rather than during the outage: the vendor will
+    reject a token it never issued, and this is what says why. It goes off by
+    itself once the device has a real token again.
+    """
+
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_name = LOCAL_AUTH_ENTITY_NAME
+
+    def __init__(self, entry: ConfigEntry, runtime) -> None:
+        self._runtime = runtime
+        self._entry_id = entry.entry_id
+        self._attr_unique_id = f"{entry.entry_id}_local_token_issued"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.entry_id)},
+            entry_type=DeviceEntryType.SERVICE,
+            name=SERVICE_DEVICE_NAME,
+        )
+
+    @property
+    def is_on(self) -> bool:
+        return self._runtime.local_auth.issued
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        return {"issued_at": self._runtime.local_auth.issued_at}
 
     async def async_added_to_hass(self) -> None:
         self.async_on_remove(

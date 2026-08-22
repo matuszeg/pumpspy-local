@@ -5,6 +5,8 @@ config flow and entity platforms can be built on top without re-testing by hand.
 """
 
 import asyncio
+import json
+import logging
 import socket
 from pathlib import Path
 from unittest.mock import patch
@@ -13,6 +15,7 @@ import pytest
 import pytest_asyncio
 from aiohttp import ClientSession
 from homeassistant.helpers import device_registry as dr
+from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.pumpspy_local.const import DOMAIN
@@ -793,3 +796,256 @@ async def test_the_service_device_is_registered_before_any_platform(
     device = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, entry.entry_id)})
     assert device is not None
     assert device.name == "PumpSpy Local"
+
+
+# A token request in the captured shape. The credentials are invented: the
+# device's real body carries the account password in clear text, and it stays
+# in the capture.
+TOKEN_REQUEST = (
+    b"POST /oauth/token HTTP/1.1\r\n"
+    b"Host: www.pumpspy.com:8081\r\n"
+    b"Content-Type: application/x-www-form-urlencoded;charset=UTF-8\r\n"
+    b"Content-Length: 63\r\n"
+    b"\r\n"
+    b"grant_type=password&username=someone%40example.com&password=xxx"
+)
+
+
+async def _send_raw(port: int, raw: bytes) -> bytes:
+    """Push bytes at the listener the way the device does and read the reply."""
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    writer.write(raw)
+    await writer.drain()
+    reply = await asyncio.wait_for(reader.read(4096), timeout=5)
+    writer.close()
+    await writer.wait_closed()
+    return reply
+
+
+async def test_a_token_request_is_relayed_untouched_while_the_vendor_is_healthy(
+    hass, upstream, free_port
+):
+    entry = await _setup(hass, upstream, free_port)
+    upstream.reply["status"] = 200
+    upstream.reply["body"] = b'{"access_token":"from-the-vendor"}'
+
+    reply = await _send_raw(free_port, TOKEN_REQUEST)
+
+    assert b"200" in reply.split(b"\r\n")[0]
+    assert b"from-the-vendor" in reply
+    assert upstream.requests == ["/oauth/token"]
+    assert runtime_of(hass, entry).local_auth.issued is False
+
+
+async def test_a_vendor_401_reaches_the_device_when_the_vendor_is_answering(
+    hass, upstream, free_port
+):
+    """A revoked account has to stay visible rather than be papered over."""
+    entry = await _setup(hass, upstream, free_port)
+    upstream.reply["status"] = 401
+    upstream.reply["body"] = b"nope"
+
+    reply = await _send_raw(free_port, TOKEN_REQUEST)
+
+    assert b"401" in reply.split(b"\r\n")[0]
+    assert runtime_of(hass, entry).local_auth.issued is False
+
+
+async def test_it_answers_the_token_request_once_the_vendor_is_unreachable(
+    hass, upstream, free_port
+):
+    entry = await _setup(hass, upstream, free_port)
+    runtime = runtime_of(hass, entry)
+    # The measured verdict from #19: four consecutive failures.
+    for _ in range(4):
+        runtime.vendor.record_failure("boom")
+    upstream.reply["status"] = 401
+    upstream.reply["body"] = b"nope"
+
+    reply = await _send_raw(free_port, TOKEN_REQUEST)
+
+    head, _, body = reply.partition(b"\r\n\r\n")
+    assert b"200" in head.split(b"\r\n")[0]
+    assert b"application/json" in head
+    minted = json.loads(body)
+    assert minted["token_type"] == "bearer"
+    assert minted["scope"] == "read"
+    assert runtime.local_auth.issued is True
+
+
+async def test_a_path_that_merely_starts_with_the_auth_path_is_not_special_cased(
+    hass, upstream, free_port
+):
+    """/oauth/tokens is not /oauth/token -- a prefix match would confuse them.
+
+    Routed through the ordinary relay path like any other request: no minting
+    logic involved, whatever the vendor is doing.
+    """
+    await _setup(hass, upstream, free_port)
+
+    async with ClientSession() as session:
+        async with session.post(
+            f"http://127.0.0.1:{free_port}/oauth/tokens", data=b"{}"
+        ) as response:
+            body = await response.read()
+
+    assert upstream.requests == ["/oauth/tokens"]
+    assert body == b"ok"
+
+
+async def test_a_relay_failure_is_minted_when_the_vendor_is_already_unreachable(
+    hass, upstream, free_port
+):
+    """The real outages produced this shape, not a vendor 401.
+
+    A vendor that has stopped answering at all fails the relay outright --
+    forward() raises and _relay returns None, no status at all -- which is
+    what should_mint has to handle, not only a 401 reply.
+    """
+    entry = await _setup(hass, upstream, free_port)
+    runtime = runtime_of(hass, entry)
+    for _ in range(4):
+        runtime.vendor.record_failure("boom")
+    await upstream.close()
+
+    reply = await _send_raw(free_port, TOKEN_REQUEST)
+
+    head, _, body = reply.partition(b"\r\n\r\n")
+    assert b"200" in head.split(b"\r\n")[0]
+    minted = json.loads(body)
+    assert minted["token_type"] == "bearer"
+    assert runtime.local_auth.issued is True
+
+
+async def test_a_relay_failure_gets_a_502_when_minting_is_declined(
+    hass, upstream, free_port
+):
+    """Regressing this to a synthetic 200 would keep every other test green.
+
+    Nothing has judged the vendor unreachable yet (reachable is still None,
+    "never asked"), so should_mint declines even though the relay failed --
+    and the device has to be told its event was not delivered, not lied to.
+    """
+    entry = await _setup(hass, upstream, free_port)
+    runtime = runtime_of(hass, entry)
+    assert runtime.vendor.reachable is None
+    await upstream.close()
+
+    reply = await _send_raw(free_port, TOKEN_REQUEST)
+
+    assert b"502" in reply.split(b"\r\n")[0]
+    assert runtime.local_auth.issued is False
+
+
+async def test_a_real_token_clears_the_locally_issued_flag(
+    hass, upstream, free_port
+):
+    """Recovery needs no mechanism of its own.
+
+    The vendor's first 401 to a minted token is an answer, so the reachability
+    verdict recovers on its own and the next token request is forwarded for
+    real. This is that last step.
+    """
+    entry = await _setup(hass, upstream, free_port)
+    runtime = runtime_of(hass, entry)
+    runtime.local_auth.issued_at = dt_util.utcnow()
+    upstream.reply["status"] = 200
+    upstream.reply["body"] = b'{"access_token":"from-the-vendor"}'
+
+    await _send_raw(free_port, TOKEN_REQUEST)
+
+    assert runtime.local_auth.issued is False
+
+
+async def test_the_token_request_body_is_never_logged(
+    hass, upstream, free_port, caplog
+):
+    """It carries the account password in clear text."""
+    await _setup(hass, upstream, free_port)
+    caplog.set_level(logging.DEBUG)
+
+    await _send_raw(free_port, TOKEN_REQUEST)
+
+    assert "password" not in caplog.text
+    assert "someone%40example.com" not in caplog.text
+
+
+async def test_a_recovering_vendor_is_not_minted_a_token_for_its_own_reply(
+    hass, upstream, free_port
+):
+    """The mint decision has to see this request's own outcome, not a stale one.
+
+    Four failures leave the vendor judged unreachable with one success already
+    banked toward recovery. This request's own relay is the second success in a
+    row, which flips the verdict back to reachable while the request is still in
+    flight. Reading reachable before that flip lands -- rather than after,
+    once _relay has recorded it -- would still see the old, unreachable verdict
+    and mint a token nobody needed for a vendor that just proved it was
+    answering again.
+    """
+    entry = await _setup(hass, upstream, free_port)
+    runtime = runtime_of(hass, entry)
+    for _ in range(4):
+        runtime.vendor.record_failure("boom")
+    runtime.vendor.record_success(dt_util.utcnow())
+    assert runtime.vendor.reachable is False  # one success banked, not yet two
+    upstream.reply["status"] = 401
+    upstream.reply["body"] = b"nope"
+
+    reply = await _send_raw(free_port, TOKEN_REQUEST)
+
+    assert b"401" in reply.split(b"\r\n")[0]
+    assert runtime.local_auth.issued is False
+
+
+async def test_the_locally_issued_token_is_visible_as_an_entity(
+    hass, upstream, free_port
+):
+    """It is what explains a burst of vendor 401s at recovery."""
+    entry = await _setup(hass, upstream, free_port)
+    runtime = runtime_of(hass, entry)
+    state = hass.states.get("binary_sensor.pumpspy_local_local_token_issued")
+    assert state is not None
+    assert state.state == "off"
+
+    for _ in range(4):
+        runtime.vendor.record_failure("boom")
+    upstream.reply["status"] = 401
+    await _send_raw(free_port, TOKEN_REQUEST)
+    await hass.async_block_till_done()
+
+    state = hass.states.get("binary_sensor.pumpspy_local_local_token_issued")
+    assert state.state == "on"
+    assert state.attributes["issued_at"] is not None
+
+
+async def test_the_locally_issued_entity_clears_when_the_vendor_answers_for_real(
+    hass, upstream, free_port
+):
+    """clear() has to dispatch too, not just mint().
+
+    _relay already sends SIGNAL_VENDOR once for this same request, before
+    clear() runs -- so that dispatch still carries the stale, still-issued
+    state. Without a second dispatch after clear(), the entity is stuck
+    reading "on" until some unrelated forward happens to fire SIGNAL_VENDOR,
+    which is exactly the moment recovery is being watched for.
+    """
+    entry = await _setup(hass, upstream, free_port)
+    runtime = runtime_of(hass, entry)
+    for _ in range(4):
+        runtime.vendor.record_failure("boom")
+    upstream.reply["status"] = 401
+    await _send_raw(free_port, TOKEN_REQUEST)
+    await hass.async_block_till_done()
+    assert (
+        hass.states.get("binary_sensor.pumpspy_local_local_token_issued").state
+        == "on"
+    )
+
+    upstream.reply["status"] = 200
+    upstream.reply["body"] = b'{"access_token":"from-the-vendor"}'
+    await _send_raw(free_port, TOKEN_REQUEST)
+    await hass.async_block_till_done()
+
+    state = hass.states.get("binary_sensor.pumpspy_local_local_token_issued")
+    assert state.state == "off"
