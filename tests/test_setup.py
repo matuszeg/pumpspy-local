@@ -873,6 +873,26 @@ async def test_it_answers_the_token_request_once_the_vendor_is_unreachable(
     assert runtime.local_auth.issued is True
 
 
+async def test_a_path_that_merely_starts_with_the_auth_path_is_not_special_cased(
+    hass, upstream, free_port
+):
+    """/oauth/tokens is not /oauth/token -- a prefix match would confuse them.
+
+    Routed through the ordinary relay path like any other request: no minting
+    logic involved, whatever the vendor is doing.
+    """
+    await _setup(hass, upstream, free_port)
+
+    async with ClientSession() as session:
+        async with session.post(
+            f"http://127.0.0.1:{free_port}/oauth/tokens", data=b"{}"
+        ) as response:
+            body = await response.read()
+
+    assert upstream.requests == ["/oauth/tokens"]
+    assert body == b"ok"
+
+
 async def test_a_real_token_clears_the_locally_issued_flag(
     hass, upstream, free_port
 ):

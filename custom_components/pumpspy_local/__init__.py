@@ -348,7 +348,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if proxied.path.startswith(FIRMWARE_PATH):
             return await _handle_firmware_check(proxied)
 
-        if proxied.path.startswith(AUTH_PATH):
+        # Exact match, unlike the firmware path above: that one carries a
+        # device id after it and needs the prefix, this one does not, and a
+        # prefix match would also catch /oauth/tokens or anything else that
+        # happens to start with it. proxied.path is rel_url.path_qs, so a
+        # query string (never seen from the device, but not impossible) is
+        # stripped for the comparison only -- the request relayed below still
+        # carries it, unmodified.
+        if proxied.path.partition("?")[0] == AUTH_PATH:
             return await _handle_auth(proxied)
 
         response = await _relay(proxied)
