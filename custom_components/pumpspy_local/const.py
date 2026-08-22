@@ -29,6 +29,10 @@ CONF_UPSTREAM_IP = "upstream_ip"
 # The endpoint the device polls every ~13 seconds.
 FIRMWARE_PATH = "/new_firmware"
 
+# The endpoint the device re-authenticates against, roughly every four hours in
+# normal operation and repeatedly when the vendor stops answering.
+AUTH_PATH = "/oauth/token"
+
 POLICY_OBSERVE = "observe"
 POLICY_QUARANTINE = "quarantine"
 DEFAULT_FIRMWARE_POLICY = POLICY_OBSERVE
