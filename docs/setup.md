@@ -225,6 +225,30 @@ The 30-minute threshold is deliberately loose. Telemetry arrives every two
 minutes, but after a Home Assistant restart the device took over seven minutes
 to resume, so anything tight cries wolf on every restart.
 
+## When the vendor is unreachable
+
+The device does not keep reporting into the void. If the vendor's API stops
+answering, it tolerates the failures for a few minutes, then decides its token
+has gone stale and stops sending telemetry until something issues it a new one.
+Measured during a real outage: nine minutes from the first failure to the first
+re-authentication, and then no telemetry at all for as long as the vendor
+stayed down.
+
+So while the vendor is judged unreachable, this integration answers that
+re-authentication itself rather than relaying a failure, and the device carries
+on reporting locally. Nothing is sent to the vendor and no vendor credential is
+used -- it is your device, on your network, asking this machine a question.
+
+The token it is given is not one the vendor issued, so when the vendor comes
+back it will be rejected, and the device will re-authenticate for real within a
+few minutes. `binary_sensor.pumpspy_local_local_token_issued` is on while the
+device is carrying a locally issued token, which is what explains a short burst
+of rejections at recovery.
+
+A vendor that is answering is never second-guessed: if it rejects the device's
+credentials while it is otherwise healthy, that rejection is passed straight
+through, because a real account problem should be visible rather than hidden.
+
 ## Appendix — worked example: UniFi Dream Machine
 
 **This is one router's syntax, not a requirement.** UniFi has no interface for
