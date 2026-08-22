@@ -904,3 +904,31 @@ async def test_the_token_request_body_is_never_logged(
 
     assert "password" not in caplog.text
     assert "someone%40example.com" not in caplog.text
+
+
+async def test_a_recovering_vendor_is_not_minted_a_token_for_its_own_reply(
+    hass, upstream, free_port
+):
+    """The mint decision has to see this request's own outcome, not a stale one.
+
+    Four failures leave the vendor judged unreachable with one success already
+    banked toward recovery. This request's own relay is the second success in a
+    row, which flips the verdict back to reachable while the request is still in
+    flight. Reading reachable before that flip lands -- rather than after,
+    once _relay has recorded it -- would still see the old, unreachable verdict
+    and mint a token nobody needed for a vendor that just proved it was
+    answering again.
+    """
+    entry = await _setup(hass, upstream, free_port)
+    runtime = runtime_of(hass, entry)
+    for _ in range(4):
+        runtime.vendor.record_failure("boom")
+    runtime.vendor.record_success(dt_util.utcnow())
+    assert runtime.vendor.reachable is False  # one success banked, not yet two
+    upstream.reply["status"] = 401
+    upstream.reply["body"] = b"nope"
+
+    reply = await _send_raw(free_port, TOKEN_REQUEST)
+
+    assert b"401" in reply.split(b"\r\n")[0]
+    assert runtime.local_auth.issued is False
