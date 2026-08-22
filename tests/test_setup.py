@@ -893,6 +893,50 @@ async def test_a_path_that_merely_starts_with_the_auth_path_is_not_special_cased
     assert body == b"ok"
 
 
+async def test_a_relay_failure_is_minted_when_the_vendor_is_already_unreachable(
+    hass, upstream, free_port
+):
+    """The real outages produced this shape, not a vendor 401.
+
+    A vendor that has stopped answering at all fails the relay outright --
+    forward() raises and _relay returns None, no status at all -- which is
+    what should_mint has to handle, not only a 401 reply.
+    """
+    entry = await _setup(hass, upstream, free_port)
+    runtime = runtime_of(hass, entry)
+    for _ in range(4):
+        runtime.vendor.record_failure("boom")
+    await upstream.close()
+
+    reply = await _send_raw(free_port, TOKEN_REQUEST)
+
+    head, _, body = reply.partition(b"\r\n\r\n")
+    assert b"200" in head.split(b"\r\n")[0]
+    minted = json.loads(body)
+    assert minted["token_type"] == "bearer"
+    assert runtime.local_auth.issued is True
+
+
+async def test_a_relay_failure_gets_a_502_when_minting_is_declined(
+    hass, upstream, free_port
+):
+    """Regressing this to a synthetic 200 would keep every other test green.
+
+    Nothing has judged the vendor unreachable yet (reachable is still None,
+    "never asked"), so should_mint declines even though the relay failed --
+    and the device has to be told its event was not delivered, not lied to.
+    """
+    entry = await _setup(hass, upstream, free_port)
+    runtime = runtime_of(hass, entry)
+    assert runtime.vendor.reachable is None
+    await upstream.close()
+
+    reply = await _send_raw(free_port, TOKEN_REQUEST)
+
+    assert b"502" in reply.split(b"\r\n")[0]
+    assert runtime.local_auth.issued is False
+
+
 async def test_a_real_token_clears_the_locally_issued_flag(
     hass, upstream, free_port
 ):
