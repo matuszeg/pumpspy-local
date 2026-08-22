@@ -31,12 +31,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
+AUTH_CONTENT_TYPE = "application/json;charset=UTF-8"
+
 # What the vendor answers with, from a capture taken 2026-08-14. Four keys in
 # this order, both tokens lowercase UUIDs, and no expires_in -- the device
 # re-authenticates on its own four-hourly clock rather than on expiry, so
 # nothing here has to carry a lifetime.
-AUTH_CONTENT_TYPE = "application/json;charset=UTF-8"
-
 TOKEN_TYPE = "bearer"
 SCOPE = "read"
 
