@@ -240,10 +240,16 @@ on reporting locally. Nothing is sent to the vendor and no vendor credential is
 used -- it is your device, on your network, asking this machine a question.
 
 The token it is given is not one the vendor issued, so when the vendor comes
-back it will be rejected, and the device will re-authenticate for real within a
-few minutes. `binary_sensor.pumpspy_local_local_token_issued` is on while the
-device is carrying a locally issued token, which is what explains a short burst
-of rejections at recovery.
+back it will eventually be rejected -- but not right away. Holding a token the
+device believes is still good, it has no reason to re-authenticate on its own,
+so it keeps presenting the local one for roughly nine minutes after the vendor
+recovers before it next asks for a real token. Every telemetry POST in that
+window is rejected, and the device drops an event for good after three
+retries, so anything reported in those nine minutes is recorded here but never
+reaches the vendor. `binary_sensor.pumpspy_local_local_token_issued` is on
+while the device is carrying a locally issued token, which is what explains
+that window. This is the accepted cost of answering locally at all, not a
+malfunction.
 
 A vendor that is answering is never second-guessed: if it rejects the device's
 credentials while it is otherwise healthy, that rejection is passed straight
