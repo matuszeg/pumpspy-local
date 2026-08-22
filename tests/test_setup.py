@@ -953,3 +953,35 @@ async def test_the_locally_issued_token_is_visible_as_an_entity(
     state = hass.states.get("binary_sensor.pumpspy_local_local_token_issued")
     assert state.state == "on"
     assert state.attributes["issued_at"] is not None
+
+
+async def test_the_locally_issued_entity_clears_when_the_vendor_answers_for_real(
+    hass, upstream, free_port
+):
+    """clear() has to dispatch too, not just mint().
+
+    _relay already sends SIGNAL_VENDOR once for this same request, before
+    clear() runs -- so that dispatch still carries the stale, still-issued
+    state. Without a second dispatch after clear(), the entity is stuck
+    reading "on" until some unrelated forward happens to fire SIGNAL_VENDOR,
+    which is exactly the moment recovery is being watched for.
+    """
+    entry = await _setup(hass, upstream, free_port)
+    runtime = runtime_of(hass, entry)
+    for _ in range(4):
+        runtime.vendor.record_failure("boom")
+    upstream.reply["status"] = 401
+    await _send_raw(free_port, TOKEN_REQUEST)
+    await hass.async_block_till_done()
+    assert (
+        hass.states.get("binary_sensor.pumpspy_local_local_token_issued").state
+        == "on"
+    )
+
+    upstream.reply["status"] = 200
+    upstream.reply["body"] = b'{"access_token":"from-the-vendor"}'
+    await _send_raw(free_port, TOKEN_REQUEST)
+    await hass.async_block_till_done()
+
+    state = hass.states.get("binary_sensor.pumpspy_local_local_token_issued")
+    assert state.state == "off"

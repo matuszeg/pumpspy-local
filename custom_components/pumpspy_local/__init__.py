@@ -309,8 +309,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         status = response.status if response is not None else None
 
         if status == 200:
-            # The device is back on a token the vendor issued.
+            # The device is back on a token the vendor issued. _relay already
+            # dispatched SIGNAL_VENDOR once for this request, before this line
+            # ran, so that dispatch carried the stale (still-issued) state --
+            # without a second one here the entity keeps reading "on" until
+            # some unrelated forward happens to dispatch again, which is
+            # exactly the moment recovery is being watched for.
             runtime.local_auth.clear()
+            async_dispatcher_send(hass, SIGNAL_VENDOR, entry.entry_id)
         elif should_mint(runtime.vendor.reachable, status):
             _LOGGER.warning(
                 "vendor unreachable -- answering the device's token request "
