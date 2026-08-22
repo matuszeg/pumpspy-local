@@ -932,3 +932,24 @@ async def test_a_recovering_vendor_is_not_minted_a_token_for_its_own_reply(
 
     assert b"401" in reply.split(b"\r\n")[0]
     assert runtime.local_auth.issued is False
+
+
+async def test_the_locally_issued_token_is_visible_as_an_entity(
+    hass, upstream, free_port
+):
+    """It is what explains a burst of vendor 401s at recovery."""
+    entry = await _setup(hass, upstream, free_port)
+    runtime = runtime_of(hass, entry)
+    state = hass.states.get("binary_sensor.pumpspy_local_local_token_issued")
+    assert state is not None
+    assert state.state == "off"
+
+    for _ in range(4):
+        runtime.vendor.record_failure("boom")
+    upstream.reply["status"] = 401
+    await _send_raw(free_port, TOKEN_REQUEST)
+    await hass.async_block_till_done()
+
+    state = hass.states.get("binary_sensor.pumpspy_local_local_token_issued")
+    assert state.state == "on"
+    assert state.attributes["issued_at"] is not None

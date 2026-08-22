@@ -12,6 +12,10 @@ SERVICE_DEVICE_NAME = "PumpSpy Local"
 # sensor's entity id, which the documented automation names. Kept here so the
 # two cannot drift apart quietly.
 VENDOR_ENTITY_NAME = "Vendor reachable"
+
+# Slugified together with the device name into the entity id, same as the
+# vendor sensor above.
+LOCAL_AUTH_ENTITY_NAME = "Local token issued"
 MODEL = "PumpSpy / PitBoss+"
 
 CONF_PORT = "port"
