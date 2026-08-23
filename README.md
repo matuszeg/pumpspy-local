@@ -13,9 +13,21 @@ Supports PumpSpy monitors and the PitBoss+ system from Richtech Industries, whic
 
 These monitors report their telemetry to a vendor cloud service over **unencrypted HTTP**. `pumpspy-local` reads that traffic on your own network, parses it, and turns it into Home Assistant entities.
 
-The result is real-time, entirely local sensors — no account, no credentials sent anywhere, and no dependency on the vendor's servers being up or their API staying the same.
+The result is real-time, entirely local sensors — no account, no credentials sent anywhere, and nothing that stops working when the vendor's API does. That claim has been tested against real outages, and it has a limit; both are below.
 
 The device's data is still **forwarded upstream unchanged**, so the vendor's own app and alerting keep working exactly as before. This is a read-and-relay tool: it adds a local view of data your device already broadcasts.
+
+### When the vendor's cloud goes down
+
+On 2026-08-20 the vendor's device API stopped answering for hours. Their website stayed up; the port accepted connections and then never replied. The phone app went with it — and this is the part worth writing down, because it is the whole argument in one image: **the app showed a green check mark and a confident-looking "last signal update" timestamp, five days stale, presented as current.** A cloud service that fails this way does not announce that it has failed. It shows you old data with a reassuring tick beside it.
+
+Home Assistant recorded battery voltage, Wi-Fi signal and the rest normally throughout, because parsing the device's traffic does not depend on the forward to the vendor succeeding.
+
+That is the claim. The limit has to be stated in the same breath, because the device itself is not indifferent to the vendor. After roughly nine minutes of undelivered reports it concludes its token is stale, stops sending telemetry to anyone, and retries `POST /oauth/token` every eleven seconds until something answers. Nothing here is broken at that point — the device has simply stopped talking. Measured on the reference install during one 34-minute outage: it did this twice, and was silent to everyone for about fourteen of those thirty-four minutes.
+
+So `pumpspy-local` answers that token request itself, once it can see the vendor is unreachable. The device gets a token in about two milliseconds and resumes its full reporting set within fifteen seconds, and local monitoring carries on for as long as the outage does. Recovery needs no mechanism: when the vendor returns it rejects the locally issued token, and a rejection is an *answer* rather than a silence, so the integration stops issuing them and the device re-authenticates for real.
+
+**Where this stops.** A token is only issued once the vendor is judged unreachable — not answering at all. An outage where the vendor answers, with errors, counts as reached and mints nothing, so the device goes quiet as before. That gate is deliberate: it is the same rule that keeps a genuinely revoked account from being papered over, and a real credential problem has to stay visible. It is not hypothetical either — just after midnight UTC on 2026-08-21 the vendor's authentication tier returned 401s, and everything else 500s, rather than failing outright.
 
 ### How this differs from existing projects
 
