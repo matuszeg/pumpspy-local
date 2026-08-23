@@ -21,11 +21,17 @@ import pytest
 from custom_components.pumpspy_local.core.parser import _PARSERS
 
 SHIM = Path(__file__).parent.parent / "shim" / "pumpspy-shim.conf"
+OVERRIDE = Path(__file__).parent.parent / "shim" / "nginx-service-override.conf"
 
 
 @pytest.fixture(name="config")
 def config_fixture() -> str:
     return SHIM.read_text()
+
+
+@pytest.fixture(name="override")
+def override_fixture() -> str:
+    return OVERRIDE.read_text()
 
 
 def _block(config: str, header: str) -> str:
@@ -71,3 +77,21 @@ def test_it_ships_a_placeholder_rather_than_an_address(config: str) -> None:
 def test_no_device_id_can_hide_in_it(config: str) -> None:
     """The same rule the dashboard is held to: no id-shaped number, anywhere."""
     assert not re.search(r"\d{10,}", config)
+
+
+def test_nginx_is_ordered_after_name_resolution(override: str) -> None:
+    """It resolves the vendor while parsing, so starting before DNS is fatal."""
+    assert re.search(r"^After=.*\bnss-lookup\.target\b", override, re.MULTILINE)
+
+
+def test_a_start_that_beat_dns_is_retried(override: str) -> None:
+    """Ordering is not a guarantee. Without this, nginx exits once and stays down,
+    and the withdrawn redirect hides it: the vendor's app looks fine throughout."""
+    assert re.search(r"^Restart=on-failure$", override, re.MULTILINE)
+    assert re.search(r"^RestartSec=", override, re.MULTILINE)
+
+
+def test_the_retrying_is_never_given_up_on(override: str) -> None:
+    """systemd stops retrying by default. A shim that gives up is a shim that is
+    down for good after one unlucky boot."""
+    assert re.search(r"^StartLimitIntervalSec=0$", override, re.MULTILINE)

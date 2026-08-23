@@ -57,7 +57,10 @@ Wherever it runs, that machine becomes the device's front door. See
    in the integration's options, then point the upstream at the new one.
 3. Remove any default site that would also bind the port, then
    `nginx -t && systemctl reload nginx`.
-4. Point your DNS rewrite or NAT redirect at nginx instead of at Home
+4. Install [`shim/nginx-service-override.conf`](../shim/nginx-service-override.conf)
+   as `/etc/systemd/system/nginx.service.d/override.conf` and run
+   `systemctl daemon-reload`. This is not optional tidying -- see below.
+5. Point your DNS rewrite or NAT redirect at nginx instead of at Home
    Assistant, and make sure nginx's own path to `www.pumpspy.com` is *not*
    caught by that redirect -- otherwise the fallback loops back into itself.
    Scoping the redirect to the device's source address is the simplest way.
@@ -72,6 +75,28 @@ nginx resolves the vendor's addresses only when it starts or reloads -- and
 `www.pumpspy.com` answers with eight of them, which will not stay the same
 forever. Without a periodic reload the fallback path can strand itself on stale
 addresses months later, and you would find out during an outage.
+
+### The same fact makes booting dangerous
+
+Because the resolution happens while nginx *parses* its configuration, a machine
+that reaches nginx before a resolver is answering does not start with a degraded
+fallback -- it does not start at all:
+
+```
+[emerg] host not found in upstream "www.pumpspy.com:8081"
+```
+
+nginx exits, and by default nothing tries again. That is why step 4 above
+matters: the drop-in orders nginx after `nss-lookup.target` and, more
+importantly, restarts it on failure, so the retry ten seconds later finds the
+resolver up.
+
+Without it the shim can be dead from boot with nothing to show for it. The
+health check stops answering, your watchdog withdraws the redirect exactly as
+designed, and the device reports to the vendor directly -- so the vendor's app
+looks completely healthy while Home Assistant records nothing at all. On the
+reference install this happened after a routine host reboot and went unnoticed
+for three hours.
 
 ## When the shim itself dies
 
