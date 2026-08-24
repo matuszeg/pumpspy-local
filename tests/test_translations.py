@@ -13,6 +13,8 @@ dialog was opened on a real instance.
 import json
 from pathlib import Path
 
+import pytest
+
 from custom_components.pumpspy_local.config_flow import SCHEMA
 
 COMPONENT = (
@@ -36,24 +38,37 @@ def test_the_translations_match_the_source_strings():
     assert json.loads(ENGLISH.read_text()) == json.loads(STRINGS.read_text())
 
 
-def test_every_field_in_the_dialog_has_a_label():
-    labels = json.loads(ENGLISH.read_text())["config"]["step"]["user"]["data"]
+@pytest.mark.parametrize("step", ["user", "reconfigure"])
+def test_every_field_in_the_dialog_has_a_label(step):
+    labels = json.loads(ENGLISH.read_text())["config"]["step"][step]["data"]
 
     missing = sorted(str(key) for key in SCHEMA.schema if str(key) not in labels)
 
-    assert missing == [], f"fields would render as raw keys: {missing}"
+    assert missing == [], f"fields would render as raw keys in {step}: {missing}"
 
 
-def test_every_field_in_the_dialog_is_explained():
+@pytest.mark.parametrize("step", ["user", "reconfigure"])
+def test_every_field_in_the_dialog_is_explained(step):
     """The help text under each field is where the reasoning lives.
 
     These settings are not self-evident -- why a separate nameserver exists at
     all only makes sense with the explanation attached.
     """
-    described = json.loads(ENGLISH.read_text())["config"]["step"]["user"][
+    described = json.loads(ENGLISH.read_text())["config"]["step"][step][
         "data_description"
     ]
 
     missing = sorted(str(key) for key in SCHEMA.schema if str(key) not in described)
 
-    assert missing == [], f"fields with no explanation: {missing}"
+    assert missing == [], f"fields with no explanation in {step}: {missing}"
+
+
+def test_the_rejected_port_explains_itself():
+    """An error key with no text renders as the bare key, which explains nothing.
+
+    This is the one error the dialog can return, and it arrives at the moment
+    the user is already confused about why their port did not take.
+    """
+    errors = json.loads(ENGLISH.read_text())["config"]["error"]
+
+    assert "port_in_use" in errors

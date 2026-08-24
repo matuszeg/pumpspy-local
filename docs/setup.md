@@ -36,6 +36,13 @@ By hand: copy `custom_components/pumpspy_local/` into your Home Assistant
 **No devices appear yet, and that is expected.** Entities are created when a
 device first reports — there is nothing to configure per device.
 
+**Got one wrong?** Open the integration and choose **Reconfigure**. The same
+form comes back filled in with what you set, and saving it restarts the
+listener with the new values. If you change the listen port, change the
+redirect in step 3 to match, or the device carries on reporting to the old one.
+A port that something else on the machine is already using is refused there and
+then, with nothing changed.
+
 ## 3. Send the device's traffic to Home Assistant
 
 The principle, whatever your network: **every connection the device makes to

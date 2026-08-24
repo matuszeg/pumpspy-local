@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import socket
 from typing import Any
 
 import voluptuous as vol
@@ -77,6 +78,32 @@ SCHEMA = vol.Schema(
 )
 
 
+def _port_is_free(port: int) -> bool:
+    """Whether the listener could bind this port right now.
+
+    Bound the way the listener binds it -- every interface, with the option
+    asyncio sets for itself -- because a port that is free on loopback alone is
+    not free for us. A bind on a numeric address is a single syscall and does
+    no lookup, so this does not block the event loop.
+    """
+    with socket.socket() as probe:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            probe.bind(("0.0.0.0", port))
+        except OSError:
+            return False
+    return True
+
+
+def _whole_numbers(user_input: dict[str, Any]) -> dict[str, Any]:
+    """NumberSelector hands back a float; a port and an hour count are ints."""
+    return {
+        **user_input,
+        CONF_PORT: int(user_input[CONF_PORT]),
+        CONF_CHECK_INTERVAL_HOURS: int(user_input[CONF_CHECK_INTERVAL_HOURS]),
+    }
+
+
 class PumpspyLocalConfigFlow(ConfigFlow, domain=DOMAIN):
     """Ask for the port to listen on and where to forward."""
 
@@ -90,14 +117,50 @@ class PumpspyLocalConfigFlow(ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="single_instance_allowed")
 
         if user_input is not None:
-            # NumberSelector hands back a float; the port has to be an int.
-            data = {
-                **user_input,
-                CONF_PORT: int(user_input[CONF_PORT]),
-                CONF_CHECK_INTERVAL_HOURS: int(
-                    user_input[CONF_CHECK_INTERVAL_HOURS]
-                ),
-            }
-            return self.async_create_entry(title="pumpspy-local", data=data)
+            return self.async_create_entry(
+                title="pumpspy-local", data=_whole_numbers(user_input)
+            )
 
         return self.async_show_form(step_id="user", data_schema=SCHEMA)
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Edit the settings of the entry that already exists.
+
+        One dialog for all of them rather than the conventional split between a
+        reconfigure step for the connection and an options menu for the rest:
+        every setting here needs a full reload to take effect, so the split
+        would only make a stranger guess which of two menus holds the field
+        they typed wrong.
+        """
+        entry = self._get_reconfigure_entry()
+
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            settings = _whole_numbers(user_input)
+            # Only when it changed. Our own listener is holding the configured
+            # port, so probing it unconditionally would report every port taken
+            # and quietly make the whole dialog useless.
+            moving = settings[CONF_PORT] != entry.data[CONF_PORT]
+            if moving and not _port_is_free(settings[CONF_PORT]):
+                errors[CONF_PORT] = "port_in_use"
+            else:
+                # Reload as well as save: every setting is read once, in
+                # async_setup_entry, so without this the dialog would report
+                # success while the listener carried on with the old values.
+                return self.async_update_reload_and_abort(
+                    entry, data_updates=settings
+                )
+
+        return self.async_show_form(
+            step_id="reconfigure",
+            # Fall back to what is configured only on the way in. Once the user
+            # has typed, show what they typed, or a rejected port is silently
+            # replaced by the old one and the error makes no sense.
+            data_schema=self.add_suggested_values_to_schema(
+                SCHEMA, user_input or entry.data
+            ),
+            errors=errors,
+        )
