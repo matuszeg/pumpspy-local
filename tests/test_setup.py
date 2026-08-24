@@ -1086,3 +1086,41 @@ async def test_the_locally_issued_entity_clears_when_the_vendor_answers_for_real
 
     state = hass.states.get("binary_sensor.pumpspy_local_local_token_issued")
     assert state.state == "off"
+
+
+async def test_a_hanging_vendor_does_not_take_the_local_reading_with_it(
+    hass, hanging_upstream, free_port
+):
+    """A timeout is not a ClientError, so it would escape the relay's handlers.
+
+    That costs three things at once, and the middle one is the worst: the
+    device gets aiohttp's own 504 instead of the honest 502, the message is
+    never parsed so
+    local monitoring loses a reading it already had in hand, and no vendor
+    failure is recorded -- which is the gate #21 mints behind, so the one
+    outage shape that most needs a locally issued token would never get one.
+    """
+    with patch(
+        "custom_components.pumpspy_local.core.forward.VENDOR_TIMEOUT_SECONDS", 0.3
+    ):
+        entry = await _setup_pointing_at(
+            hass,
+            f"http://{hanging_upstream.host}:{hanging_upstream.port}",
+            free_port,
+        )
+        body = (
+            Path(__file__).parent / "fixtures" / "bbs_json_plain_battery.txt"
+        ).read_bytes()
+
+        async with ClientSession() as session:
+            async with session.post(
+                f"http://127.0.0.1:{free_port}/bbs_json", data=body
+            ) as response:
+                status = response.status
+        await hass.async_block_till_done()
+
+    assert status == 502
+    assert hass.states.get("sensor.pumpspy_11111111111111_battery_voltage").state == (
+        "13.324"
+    )
+    assert runtime_of(hass, entry).vendor.consecutive_failures > 0

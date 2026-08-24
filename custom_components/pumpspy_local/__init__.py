@@ -41,7 +41,13 @@ from .const import (
     signal_pump_run,
 )
 from .core.auth import AUTH_CONTENT_TYPE, LocalAuth, should_mint
-from .core.forward import ProxyRequest, ProxyResponse, forward, upstream_session
+from .core.forward import (
+    VENDOR_TIMEOUT_SECONDS,
+    ProxyRequest,
+    ProxyResponse,
+    forward,
+    upstream_session,
+)
 from .core.firmware import FirmwareChecker, Reply, Verdict, classify
 from .core.gallons import DEFAULT_FLOW_RATE
 from .core.parser import BbsReading, Ping, parse_request
@@ -247,6 +253,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         except ClientError as err:
             _LOGGER.warning("could not reach the vendor: %s", err)
             runtime.vendor.record_failure(str(err))
+        except TimeoutError:
+            # Named separately because a timeout is *not* a ClientError, so it
+            # would otherwise escape this handler entirely: the device would get
+            # a 504 instead of an honest 502, the message would never be parsed
+            # -- losing a reading we already had in hand -- and no failure would
+            # be recorded, which is the gate a locally minted token opens
+            # behind. A bare TimeoutError also stringifies to nothing, so the
+            # reason is written out rather than passed through.
+            reason = f"no answer within {VENDOR_TIMEOUT_SECONDS}s"
+            _LOGGER.warning("could not reach the vendor: %s", reason)
+            runtime.vendor.record_failure(reason)
         else:
             runtime.vendor.record_success(dt_util.utcnow())
             async_dispatcher_send(hass, SIGNAL_VENDOR, entry.entry_id)

@@ -75,6 +75,40 @@ async def keepalive_upstream(socket_enabled):
 
 
 @pytest_asyncio.fixture
+async def hanging_upstream(socket_enabled):
+    """A vendor that accepts the request and then never answers.
+
+    The other shape of the same outage. A hangup fails fast and the retry
+    absorbs it; a hang holds the connection open for as long as we are willing
+    to wait, which is the case that can outlast the device's patience.
+    """
+    state = {"requests": 0}
+    stop = asyncio.Event()
+    handlers: set[asyncio.Task] = set()
+
+    async def handle(reader, writer):
+        state["requests"] += 1
+        handlers.add(asyncio.current_task())
+        try:
+            await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=5)
+        except (asyncio.IncompleteReadError, asyncio.TimeoutError, OSError):
+            pass
+        # Hold the connection open and say nothing at all, until teardown.
+        await stop.wait()
+        writer.close()
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    server.host, server.port = server.sockets[0].getsockname()
+    server.state = state
+    yield server
+    stop.set()
+    if handlers:
+        await asyncio.gather(*handlers, return_exceptions=True)
+    server.close()
+    await server.wait_closed()
+
+
+@pytest_asyncio.fixture
 async def flaky_upstream(socket_enabled):
     """A vendor that hangs up on the first request without answering.
 

@@ -4,9 +4,14 @@ The device's traffic reaches the vendor through us. Anything we change here
 is a change the vendor sees, so these tests pin the relay down hard.
 """
 
+import asyncio
+import time
+
+import pytest
 from aiohttp import ClientSession
 
 from custom_components.pumpspy_local.core.forward import (
+    VENDOR_TIMEOUT_SECONDS,
     ProxyRequest,
     forward,
     upstream_session,
@@ -132,3 +137,66 @@ async def test_a_vendor_that_hangs_up_without_answering_is_retried_once(
 
     assert response.status == 200
     assert flaky_upstream.state["requests"] == 2, "should have tried exactly twice"
+
+
+def test_the_vendor_is_given_up_on_before_the_device_gives_up_on_us():
+    """The budget is set against the device's behaviour, not by taste.
+
+    The device abandons a request after about ten seconds -- seen as
+    ``device_got=499`` at 10.003 s in the proxy's access log. Since #21 a token
+    request is relayed first and only answered locally if that relay fails, so
+    a vendor that hangs rather than refuses would hold the locally minted
+    answer past the point where the device has stopped listening for it. The
+    answer whose entire value is arriving in time would not arrive at all.
+
+    Two attempts have to fit, since a hangup on the first is retried.
+    """
+    assert VENDOR_TIMEOUT_SECONDS * 2 < 10
+
+
+async def test_a_vendor_that_hangs_does_not_hold_the_request_open(
+    hanging_upstream,
+):
+    """aiohttp's default is five minutes, which is not a wait anyone survives."""
+    started = time.monotonic()
+
+    async with upstream_session(timeout_seconds=0.3) as session:
+        with pytest.raises(asyncio.TimeoutError):
+            await forward(
+                session,
+                Target(
+                    base_url=f"http://{hanging_upstream.host}:{hanging_upstream.port}",
+                    host_header="www.pumpspy.com:8081",
+                ),
+                ProxyRequest(
+                    method="POST",
+                    path="/oauth/token",
+                    headers={"Content-Type": "application/json"},
+                    body=b"{}",
+                ),
+            )
+
+    assert time.monotonic() - started < 2
+
+
+async def test_a_hang_is_not_retried_the_way_a_hangup_is(hanging_upstream):
+    """The retry exists for a vendor that answers nothing *quickly* -- a FIN
+    with no response, where replaying costs milliseconds. Replaying a hang buys
+    nothing and doubles the only thing that matters here, which is the wait."""
+    async with upstream_session(timeout_seconds=0.3) as session:
+        with pytest.raises(asyncio.TimeoutError):
+            await forward(
+                session,
+                Target(
+                    base_url=f"http://{hanging_upstream.host}:{hanging_upstream.port}",
+                    host_header="www.pumpspy.com:8081",
+                ),
+                ProxyRequest(
+                    method="POST",
+                    path="/bbs_json",
+                    headers={"Content-Type": "application/json"},
+                    body=b"{}",
+                ),
+            )
+
+    assert hanging_upstream.state["requests"] == 1

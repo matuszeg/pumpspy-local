@@ -4,12 +4,32 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from aiohttp import ClientSession, ServerDisconnectedError, TCPConnector
+from aiohttp import (
+    ClientSession,
+    ClientTimeout,
+    ServerDisconnectedError,
+    TCPConnector,
+)
 
 from .upstream import Target
 
 
-def upstream_session() -> ClientSession:
+# How long to wait for the vendor before giving up on a request.
+#
+# Set against the device, not by taste. It abandons a request after about ten
+# seconds -- visible as ``device_got=499`` at 10.003 s in the proxy's access log
+# -- and since #21 a token request is relayed to the vendor first and answered
+# locally only if that relay fails. A vendor that hangs rather than refuses
+# would therefore hold the locally minted answer past the point where the device
+# has stopped listening, which is the one thing that answer exists to beat.
+#
+# Four seconds is roughly three times the slowest healthy vendor response
+# measured at the shim (0.1-1.3 s), and leaves room for the retry below without
+# either attempt approaching the device's limit.
+VENDOR_TIMEOUT_SECONDS = 4
+
+
+def upstream_session(timeout_seconds: float | None = None) -> ClientSession:
     """A session for vendor traffic that never reuses a connection.
 
     Home Assistant's shared session pools connections, which is right for
@@ -23,7 +43,14 @@ def upstream_session() -> ClientSession:
     It is also what the device itself does: every request it sends carries
     Connection: close.
     """
-    return ClientSession(connector=TCPConnector(force_close=True))
+    # Resolved here rather than as a default argument so a test can shorten
+    # it without waiting out the real budget.
+    if timeout_seconds is None:
+        timeout_seconds = VENDOR_TIMEOUT_SECONDS
+    return ClientSession(
+        connector=TCPConnector(force_close=True),
+        timeout=ClientTimeout(total=timeout_seconds),
+    )
 
 
 @dataclass(frozen=True)
@@ -53,6 +80,12 @@ async def forward(
     address rather than a name -- that is what keeps the redirect out of the
     path -- so without this the vendor would be addressed by IP and a
     name-based host would not recognise the request.
+
+    A vendor that *hangs* is not retried, only one that hangs up. The retry is
+    worth it when nothing was answered quickly -- replaying costs milliseconds
+    -- but replaying a hang buys nothing and doubles the wait, which here is the
+    only thing that matters. This falls out of catching ServerDisconnectedError
+    alone: a timeout raises TimeoutError and leaves immediately.
 
     Retried once if the vendor hangs up without answering. It does this for
     real, intermittently: captured on the wire, it accepts the connection,
