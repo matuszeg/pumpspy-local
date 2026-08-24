@@ -14,10 +14,12 @@ from unittest.mock import patch
 import pytest
 import pytest_asyncio
 from aiohttp import ClientSession
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.helpers import device_registry as dr
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components import pumpspy_local
 from custom_components.pumpspy_local.const import DOMAIN
 from custom_components.pumpspy_local.core.state import DeviceState
 
@@ -1124,3 +1126,63 @@ async def test_a_hanging_vendor_does_not_take_the_local_reading_with_it(
         "13.324"
     )
     assert runtime_of(hass, entry).vendor.consecutive_failures > 0
+
+
+async def test_a_port_that_cannot_be_bound_leaves_nothing_behind(
+    hass, upstream, socket_enabled
+):
+    """A busy port used to throw a raw traceback out of setup.
+
+    Everything built before the bind was left behind with it: the runner, the
+    upstream session, and the entry's slot in hass.data. Retrying then piled a
+    second set on top of the first.
+    """
+    created: list[ClientSession] = []
+    real_session = pumpspy_local.upstream_session
+
+    def recorded_session(*args, **kwargs):
+        session = real_session(*args, **kwargs)
+        created.append(session)
+        return session
+
+    with socket.socket() as taken:
+        taken.bind(("0.0.0.0", 0))
+        taken.listen()
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={
+                "port": taken.getsockname()[1],
+                "upstream": f"http://{upstream.host}:{upstream.port}",
+            },
+        )
+        entry.add_to_hass(hass)
+        with patch.object(pumpspy_local, "upstream_session", recorded_session):
+            assert not await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    # Retry rather than a hard error: whatever holds the port may well let go.
+    assert entry.state is ConfigEntryState.SETUP_RETRY
+    assert entry.entry_id not in hass.data.get(DOMAIN, {})
+    assert created and all(session.closed for session in created)
+
+
+async def test_a_reload_releases_the_port_and_binds_it_again(
+    hass, upstream, free_port
+):
+    """The reconfigure dialog reloads the entry, so this is its failure mode.
+
+    A reload that leaves the socket open cannot rebind, and the integration
+    stays dead until Home Assistant itself restarts -- with the dialog having
+    reported success.
+    """
+    entry = await _setup(hass, upstream, free_port)
+
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert entry.state is ConfigEntryState.LOADED
+    async with ClientSession() as session:
+        async with session.post(
+            f"http://127.0.0.1:{free_port}/bbs_json", data=b'{"deviceid":"X"}'
+        ) as response:
+            assert response.status == 200

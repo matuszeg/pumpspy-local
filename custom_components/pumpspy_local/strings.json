@@ -22,10 +22,36 @@
           "firmware_policy": "Observe only watches and tells you. Quarantine holds an update back until you approve it, which is the one place this integration changes what your device receives.",
           "firmware_check_hours": "Your device asks about every 13 seconds. This is how often that question is actually passed on to the vendor; the device still gets an answer every time."
         }
+      },
+      "reconfigure": {
+        "title": "pumpspy-local",
+        "description": "Change any of these and the listener is restarted with the new settings. If you change the port, remember to change the redirect on your router to match, or the device carries on reporting to the old one.",
+        "data": {
+          "port": "Listen port",
+          "upstream": "Forward to",
+          "nameserver": "Look up the vendor using",
+          "upstream_ip": "Vendor address (optional)",
+          "flow_rate": "Gallons per second",
+          "firmware_policy": "Firmware updates",
+          "firmware_check_hours": "Check for firmware every (hours)"
+        },
+        "data_description": {
+          "port": "The port the device posts to. Leave at 8081 unless you know otherwise.",
+          "upstream": "Where the device's traffic is relayed so the vendor app keeps working.",
+          "nameserver": "If you redirect by DNS, your rewrite answers for this machine too, so looking up the vendor normally would point Home Assistant back at itself. This resolver is asked instead, and must be one the rewrite is not installed in.",
+          "upstream_ip": "Leave blank unless the lookup above cannot work -- outbound DNS blocked, for example. Set it and the vendor is contacted at this address directly, with no lookup at all.",
+          "flow_rate": "Used to estimate gallons from how long a pump ran. The device does not report volume, so this is an estimate; 1.0 matches the vendor's own figure.",
+          "firmware_policy": "Observe only watches and tells you. Quarantine holds an update back until you approve it, which is the one place this integration changes what your device receives.",
+          "firmware_check_hours": "Your device asks about every 13 seconds. This is how often that question is actually passed on to the vendor; the device still gets an answer every time."
+        }
       }
     },
     "abort": {
-      "single_instance_allowed": "pumpspy-local is already set up. One listener handles every device that reports to it."
+      "single_instance_allowed": "pumpspy-local is already set up. One listener handles every device that reports to it.",
+      "reconfigure_successful": "Settings saved. The listener has been restarted with them."
+    },
+    "error": {
+      "port_in_use": "Something else on this machine is already listening on that port, so the listener could not take it. Nothing has been changed. Pick a different port, or stop whatever is holding that one."
     }
   },
   "selector": {

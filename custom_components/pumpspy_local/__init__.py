@@ -14,6 +14,7 @@ from aiohttp import ClientError, ClientSession, web
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
@@ -398,7 +399,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     runner = web.AppRunner(app)
     await runner.setup()
-    await web.TCPSite(runner, "0.0.0.0", port).start()
+    try:
+        await web.TCPSite(runner, "0.0.0.0", port).start()
+    except OSError as err:
+        # Nothing here is registered with Home Assistant yet, so unloading will
+        # never run and cannot clean up after us. Undo it by hand, or the
+        # half-started runner and the upstream session are both leaked and
+        # every retry adds another pair.
+        await runner.cleanup()
+        await session.close()
+        hass.data[DOMAIN].pop(entry.entry_id, None)
+        raise ConfigEntryNotReady(
+            f"could not listen on port {port}: {err}"
+        ) from err
     runtime.runner = runner
     _LOGGER.info("listening on :%s, forwarding to %s", port, upstream)
 
