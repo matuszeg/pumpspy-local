@@ -67,7 +67,7 @@ class SelfTest:
     """
 
     duration_seconds: float
-    current_milliamps: int
+    current_milliamps: int | None
     loaded_volts: float | None = None
     at: datetime | None = None
 
@@ -205,6 +205,9 @@ class DeviceState:
         """
         return (
             run.pump == PRIMARY_PUMP
+            # None where the device wrote a current it could not format. An
+            # unreadable draw is not evidence the pump is fine.
+            and run.current_milliamps is not None
             and run.current_milliamps >= self.healthy_run_milliamps
         )
 

@@ -1,0 +1,1 @@
+[{"deviceid": 11111111111111, "utcunixtime": 1.#INF00,"idpings_data_type": 1, "value": -46.000000 }]
