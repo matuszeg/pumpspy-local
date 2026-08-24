@@ -213,3 +213,76 @@ def test_an_unreadable_device_clock_does_not_lose_the_reading():
 
     assert reading.device_time is None
     assert reading.battery_volts == 13.324
+
+
+def test_a_non_finite_device_clock_does_not_cost_us_the_whole_message():
+    """The device sometimes writes its clock out as a C non-finite float.
+
+    Every parse failure recorded on the live install was this, byte for byte:
+    ``utcunixtime`` rendered as ``1.#INF00``, which is what printf("%f") emits
+    for infinity. It is not valid JSON, so the decoder abandons the message and
+    the reading beside it goes with it -- and for /pings that reading is the
+    only thing in there we actually read.
+    """
+    pings = parse_request("/pings", fixture("pings_rssi_nonfinite_clock.txt"))
+
+    assert pings is not None
+    assert pings[0].value == -46.0
+    assert pings[0].data_type == 1
+
+
+def test_the_other_non_finite_spellings_are_tolerated_too():
+    """The same printf writes NaN and indefinite differently again."""
+    for spelling in (b"1.#QNAN0", b"-1.#IND00", b"1.#INF00"):
+        body = b'[{"deviceid": 11111111111111, "utcunixtime": %s,' % spelling
+        body += b'"idpings_data_type": 1, "value": -46.000000 }]'
+
+        pings = parse_request("/pings", body)
+
+        assert pings is not None, spelling
+        assert pings[0].value == -46.0
+
+
+def test_a_non_finite_clock_leaves_the_timestamp_unknown_not_wrong():
+    body = (
+        b'{"deviceid": 11111111111111, "utcunixtime": 1.#INF00, '
+        b'"json": "{\\"battery_voltage\\": 13324}"}'
+    )
+    reading = parse_request("/bbs_json", body)
+
+    assert reading is not None
+    assert reading.device_time is None
+    assert reading.battery_volts == 13.324
+
+
+def test_a_non_finite_clock_inside_the_escaped_inner_json_is_tolerated():
+    """/bbs_json hides a second JSON document in a string, and it can be hit too.
+
+    Those characters need no escaping, so the malformation appears verbatim in
+    the raw body and a repair over the raw bytes reaches it.
+    """
+    body = (
+        b'{"deviceid": 11111111111111, '
+        b'"json": "{\\"battery_voltage\\": 13324, \\"mamp\\": 1.#INF00, '
+        b'\\"motor\\": 1, \\"time\\": 100}"}'
+    )
+    reading = parse_request("/bbs_json", body)
+
+    assert reading is not None
+    assert reading.battery_volts == 13.324
+    assert reading.pump_run is not None
+    assert reading.pump_run.current_milliamps is None
+
+
+def test_a_repaired_message_is_not_shouted_about(caplog):
+    """892 warnings with a traceback each was the other half of the complaint."""
+    with caplog.at_level("DEBUG"):
+        parse_request("/pings", fixture("pings_rssi_nonfinite_clock.txt"))
+
+    assert not [r for r in caplog.records if r.levelname == "WARNING"]
+
+
+def test_a_body_that_is_genuinely_not_json_still_warns(caplog):
+    """The repair must not turn a real problem into a silent one."""
+    assert parse_request("/pings", b"<html>nope</html>") is None
+    assert "could not parse" in caplog.text

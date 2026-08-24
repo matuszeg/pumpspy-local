@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -28,7 +29,8 @@ class PumpRun:
 
     pump: str
     duration_seconds: float
-    current_milliamps: int
+    # None when the device wrote a current it could not format as a number.
+    current_milliamps: int | None
 
 
 @dataclass(frozen=True)
@@ -177,6 +179,21 @@ def parse_pump_alerts(raw: bytes) -> list[PumpAlert]:
     ]
 
 
+# What a C ``printf("%f")`` writes when it is handed a value that is not finite:
+# ``1.#INF00``, ``-1.#IND00``, ``1.#QNAN0``. The device does this to
+# ``utcunixtime`` when its clock is invalid, and the result is not JSON, so the
+# decoder abandons the entire message rather than the one bad field. Every parse
+# failure ever recorded on the live install was this, byte for byte -- 892 of
+# them, all reporting the same column -- and for a /pings body it costs us the
+# signal strength, which is the only thing in there we read at all.
+#
+# Matching on the raw bytes reaches the second JSON document /bbs_json hides
+# inside a string, because none of these characters need escaping and so they
+# appear there verbatim. A digit followed by ``.#`` does not occur anywhere in
+# this protocol's real values, and the substitution only ever runs on a body
+# that has already failed to parse.
+_NON_FINITE = re.compile(rb"-?\d+\.#[A-Za-z]+\d*")
+
 _PARSERS = {
     "/bbs_json": parse_bbs_json,
     "/pings": parse_pings,
@@ -198,6 +215,19 @@ def parse_request(path: str, body: bytes) -> ParsedMessage | None:
 
     try:
         return parser(body)
-    except Exception:
-        _LOGGER.warning("could not parse %s body", path, exc_info=True)
+    except Exception as err:
+        repaired = _NON_FINITE.sub(b"null", body)
+        if repaired != body:
+            try:
+                parsed = parser(repaired)
+            except Exception:
+                # The non-finite value was not the only thing wrong with it.
+                # Fall through and report the original failure, not this one.
+                pass
+            else:
+                _LOGGER.debug(
+                    "%s carried a non-finite number, read without it", path
+                )
+                return parsed
+        _LOGGER.warning("could not parse %s body", path, exc_info=err)
         return None
