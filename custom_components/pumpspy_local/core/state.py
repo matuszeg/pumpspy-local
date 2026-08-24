@@ -91,6 +91,13 @@ class DeviceState:
     last_run: PumpRun | None = None
     wifi_dbm: float | None = None
 
+    # Seconds between the timestamp the device put on its last message and the
+    # moment that message arrived. Recorded because every other time we hold is
+    # arrival time, which cannot tell a pump run that just happened from one the
+    # device queued during an outage and delivered on reconnect. A steady value
+    # here is ordinary clock drift; one that jumps is a message that waited.
+    clock_offset_seconds: float | None = None
+
     # A run reported before the event entity existed -- which happens whenever a
     # device's very first message is a pump run, since the entity is created in
     # response to that same message. The entity fires and clears it once it is
@@ -116,10 +123,15 @@ class DeviceState:
 
         ``today`` is passed in rather than read from the clock so the daily
         rollover is testable; it defaults to the local date. ``now`` timestamps
-        a backup self-test, and is passed in for the same reason. The device
-        sends its own clock too, but device clocks drift and this one is only
-        ever compared against Home Assistant's.
+        a backup self-test and measures the device's clock offset, and is passed
+        in for the same reason. The device's own clock is never used as a
+        timestamp -- device clocks drift -- only compared against ours.
         """
+        if reading.device_time is not None and now is not None:
+            # Left alone when the device sends no clock, rather than reset: a
+            # stale offset is honest, a fabricated zero is not.
+            self.clock_offset_seconds = (now - reading.device_time).total_seconds()
+
         for field in (
             "battery_volts",
             "loaded_volts",

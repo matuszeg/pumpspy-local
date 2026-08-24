@@ -7,7 +7,11 @@ layer that turns a stream of partial messages into something an entity can read.
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from custom_components.pumpspy_local.core.parser import parse_bbs_json, parse_pings
+from custom_components.pumpspy_local.core.parser import (
+    BbsReading,
+    parse_bbs_json,
+    parse_pings,
+)
 from custom_components.pumpspy_local.core.state import DeviceState
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -389,3 +393,44 @@ def test_an_unidentified_ping_type_is_ignored_rather_than_guessed_at():
     state.apply_ping(pings("pings_type3.txt")[0])
 
     assert state.wifi_dbm is None
+
+
+def test_records_how_far_behind_arrival_the_devices_own_clock_was():
+    """The device's timestamp is only useful next to when it actually landed."""
+    state = DeviceState(device_id="11111111111111")
+
+    state.apply(
+        reading("bbs_json_plain_battery.txt"),
+        now=datetime(2026, 8, 13, 20, 23, 36, tzinfo=timezone.utc),
+    )
+
+    assert state.clock_offset_seconds == 10.0
+
+
+def test_the_offset_tracks_the_latest_message():
+    """A steady offset is drift. One that jumps is a message that waited."""
+    state = DeviceState(device_id="11111111111111")
+
+    state.apply(
+        reading("bbs_json_plain_battery.txt"),
+        now=datetime(2026, 8, 13, 20, 23, 36, tzinfo=timezone.utc),
+    )
+    state.apply(
+        reading("bbs_json_pump_run.txt"),
+        now=datetime(2026, 8, 14, 0, 4, 42, tzinfo=timezone.utc),
+    )
+
+    assert state.clock_offset_seconds == 300.0
+
+
+def test_a_message_without_a_device_clock_leaves_the_offset_alone():
+    """Better a stale offset than a fabricated zero."""
+    state = DeviceState(device_id="11111111111111")
+    state.clock_offset_seconds = 4.0
+
+    state.apply(
+        BbsReading(device_id="11111111111111", battery_volts=13.0),
+        now=datetime(2026, 8, 13, 20, 23, 36, tzinfo=timezone.utc),
+    )
+
+    assert state.clock_offset_seconds == 4.0

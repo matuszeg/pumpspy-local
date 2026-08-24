@@ -5,6 +5,7 @@ replaced. Nothing else about them has been touched, including the odd spacing.
 """
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 from custom_components.pumpspy_local.core.parser import (
@@ -165,4 +166,50 @@ def test_parse_request_ignores_paths_it_does_not_handle():
 def test_parse_request_routes_a_known_path():
     reading = parse_request("/bbs_json", fixture("bbs_json_plain_battery.txt"))
 
+    assert reading.battery_volts == 13.324
+
+
+def test_reads_the_clock_the_device_stamped_the_message_with():
+    """Kept because every timestamp we hold otherwise is arrival time.
+
+    A device that queues an event during an outage and delivers it on reconnect
+    would be indistinguishable from one that ran the pump at that moment, and
+    run timing is what #17 wants to build on.
+    """
+    reading = parse_bbs_json(fixture("bbs_json_plain_battery.txt"))
+
+    assert reading.device_time == datetime(
+        2026, 8, 13, 20, 23, 26, tzinfo=timezone.utc
+    )
+
+
+def test_the_device_clock_is_milliseconds_on_the_wire():
+    body = json.dumps(
+        {"deviceid": 11111111111111, "utcunixtime": 1786652606000, "json": "{}"}
+    ).encode()
+
+    assert parse_bbs_json(body).device_time == datetime(
+        2026, 8, 13, 20, 23, 26, tzinfo=timezone.utc
+    )
+
+
+def test_a_message_without_a_device_clock_still_parses():
+    """Nothing may hinge on a field the firmware could stop sending."""
+    body = json.dumps({"deviceid": 11111111111111, "json": "{}"}).encode()
+
+    assert parse_bbs_json(body).device_time is None
+
+
+def test_an_unreadable_device_clock_does_not_lose_the_reading():
+    """The voltage in the same message is worth more than the timestamp."""
+    body = json.dumps(
+        {
+            "deviceid": 11111111111111,
+            "utcunixtime": "not a number",
+            "json": '{"battery_voltage": 13324}',
+        }
+    ).encode()
+    reading = parse_bbs_json(body)
+
+    assert reading.device_time is None
     assert reading.battery_volts == 13.324

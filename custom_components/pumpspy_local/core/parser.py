@@ -8,6 +8,8 @@ Shape notes, all from real captures:
 - ``POST /pings`` and ``POST /pump_outlet_alerts`` are JSON *arrays*.
 - ``/pump_outlet_alerts`` uses a camelCase schema of its own.
 - Voltages are millivolts on the wire, and run durations are tenths of a second.
+- Every message carries ``utcunixtime``, the device's own clock in milliseconds.
+  It is the only timestamp that is not ours: everything else is arrival time.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -33,6 +36,11 @@ class BbsReading:
     """One ``/bbs_json`` message. Absent fields stay ``None``."""
 
     device_id: str
+    # When the *device* says this message was made, as distinct from when it
+    # reached us. The two normally differ by a steady offset -- device clocks
+    # drift -- so the value is only meaningful compared against that baseline.
+    # A message whose offset jumps is one that waited somewhere.
+    device_time: datetime | None = None
     battery_volts: float | None = None
     loaded_volts: float | None = None
     ac_power: bool | None = None
@@ -88,6 +96,22 @@ _KNOWN_BBS_FIELDS = frozenset(
 )
 
 
+def _device_time(milliseconds: object) -> datetime | None:
+    """Read ``utcunixtime``, or ``None`` if it is missing or unreadable.
+
+    Never allowed to fail the parse. The readings in the same message are worth
+    more than the timestamp, and a firmware that changed this field must not
+    cost us the battery voltage beside it.
+    """
+    if milliseconds is None:
+        return None
+    try:
+        return datetime.fromtimestamp(float(milliseconds) / 1000, timezone.utc)
+    except (TypeError, ValueError, OSError, OverflowError):
+        _LOGGER.debug("unreadable utcunixtime %r", milliseconds)
+        return None
+
+
 def _volts(millivolts: int | None) -> float | None:
     return None if millivolts is None else millivolts / 1000
 
@@ -118,6 +142,7 @@ def parse_bbs_json(raw: bytes) -> BbsReading:
 
     return BbsReading(
         device_id=str(outer["deviceid"]),
+        device_time=_device_time(outer.get("utcunixtime")),
         battery_volts=_volts(inner.get("battery_voltage")),
         loaded_volts=_volts(inner.get("loaded")),
         ac_power=_flag(inner.get("ac_power")),

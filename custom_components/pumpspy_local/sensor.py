@@ -167,6 +167,20 @@ SENSORS = SENSORS + (
         ),
     ),
     PumpspySensorDescription(
+        key="device_clock_offset",
+        # Diagnostic, and honestly named: this is not the device's clock error,
+        # it is that plus however long the message took to arrive. The two
+        # cannot be separated from here, and for the question it exists to
+        # answer -- was this message made now, or made earlier and held -- they
+        # do not need to be.
+        name="Device clock offset",
+        device_class=SensorDeviceClass.DURATION,
+        native_unit_of_measurement=UnitOfTime.SECONDS,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda device: device.clock_offset_seconds,
+    ),
+    PumpspySensorDescription(
         key="last_run_estimated_gallons",
         # "Estimated" in the name on purpose: this is derived from run duration,
         # not measured, and matches how the vendor's own app frames it.
