@@ -69,6 +69,11 @@ class PumpRunEvent(PumpspyEntity, EventEntity):
             {
                 "duration_seconds": run.duration_seconds,
                 "current_milliamps": run.current_milliamps,
+                # How far behind arrival the device's own clock was on the
+                # message that carried this run. Read against the device's
+                # usual offset, not on its own: a figure far from the usual one
+                # means the run was reported late, not that it just happened.
+                "clock_offset_seconds": self._device.clock_offset_seconds,
             },
         )
         self.async_write_ha_state()

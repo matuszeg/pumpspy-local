@@ -314,6 +314,43 @@ async def test_a_pump_run_fires_an_event(hass, upstream, free_port):
     assert events[0].attributes["current_milliamps"] == 2800
 
 
+async def test_a_run_carries_how_late_its_own_message_was(hass, upstream, free_port):
+    """Without this the event's only timestamp is the moment it reached us.
+
+    A device that queues a run during a vendor outage and delivers it on
+    reconnect would look identical to one that ran the pump right then, and
+    everything built on run timing would be fed that.
+    """
+    await _setup(hass, upstream, free_port)
+    body = (Path(__file__).parent / "fixtures" / "bbs_json_pump_run.txt").read_bytes()
+
+    async with ClientSession() as session:
+        async with session.post(f"http://127.0.0.1:{free_port}/bbs_json", data=body):
+            pass
+    await hass.async_block_till_done()
+
+    offset = hass.states.async_all("event")[0].attributes["clock_offset_seconds"]
+    # The fixture is a real capture from 2026-08-13, so against a live clock the
+    # offset is enormous. The number is not the point; carrying it is.
+    assert offset > 0
+
+
+async def test_the_clock_offset_is_exposed_for_comparison(hass, upstream, free_port):
+    """The event pins one message's offset; this shows what is normal for the
+    device, which is the only thing that makes the event's figure readable."""
+    await _setup(hass, upstream, free_port)
+    body = (Path(__file__).parent / "fixtures" / "bbs_json_pump_run.txt").read_bytes()
+
+    async with ClientSession() as session:
+        async with session.post(f"http://127.0.0.1:{free_port}/bbs_json", data=body):
+            pass
+    await hass.async_block_till_done()
+
+    state = hass.states.get("sensor.pumpspy_11111111111111_device_clock_offset")
+    assert state is not None
+    assert float(state.state) > 0
+
+
 async def test_a_run_after_the_device_is_known_also_fires(hass, upstream, free_port):
     """The live path, as opposed to a run that arrives before the entity exists.
 
