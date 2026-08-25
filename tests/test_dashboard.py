@@ -18,6 +18,11 @@ import yaml
 from homeassistant.util import slugify
 
 from custom_components.pumpspy_local import binary_sensor, button, event, sensor
+from custom_components.pumpspy_local.const import (
+    LOCAL_AUTH_ENTITY_NAME,
+    SERVICE_DEVICE_NAME,
+    VENDOR_ENTITY_NAME,
+)
 
 DASHBOARD = (
     Path(__file__).parent.parent / "dashboard" / "pumpspy-dashboard.yaml"
@@ -35,6 +40,18 @@ PLACEHOLDER = "your_device_id"
 # the rule to something a real id could slip through.
 EXAMPLE_DEVICE_ID = "123456789012345"
 
+# The integration's own service device owns a couple of entities that describe
+# the proxy rather than a pump, so no device id appears in their ids and the
+# find-and-replace in the instructions never touches them. They are built by
+# hand rather than from an entity description, so the rebuild below cannot see
+# them, and the placeholder rule has to let them through explicitly -- naming
+# them one by one rather than exempting anything that lacks a device id, which
+# would exempt a typo too.
+SERVICE_ENTITY_IDS = frozenset(
+    f"binary_sensor.{slugify(f'{SERVICE_DEVICE_NAME} {name}')}"
+    for name in (VENDOR_ENTITY_NAME, LOCAL_AUTH_ENTITY_NAME)
+)
+
 
 def _entity_ids_the_integration_creates() -> set[str]:
     """Rebuild the entity ids from the descriptions, as HA would."""
@@ -51,7 +68,7 @@ def _entity_ids_the_integration_creates() -> set[str]:
         f"{domain}.{slugify(f'PumpSpy {PLACEHOLDER} {description.name}')}"
         for domain, descriptions in by_domain.items()
         for description in descriptions
-    }
+    } | SERVICE_ENTITY_IDS
 
 
 def _referenced_entity_ids(node: object) -> set[str]:
@@ -102,6 +119,25 @@ def test_every_entity_the_dashboard_names_is_one_we_create(dashboard):
     )
 
 
+def test_the_dashboard_can_tell_the_two_silences_apart(dashboard):
+    """The stale chips must say *which* failure this is.
+
+    A vendor outage and a broken redirect both end with the display going
+    stale, and the vendor sensor is the only thing that separates them. It is
+    read from inside a Jinja template as well as from a card condition, and the
+    walk above only sees the latter, so this checks the raw text too.
+    """
+    vendor = f"binary_sensor.{slugify(f'{SERVICE_DEVICE_NAME} {VENDOR_ENTITY_NAME}')}"
+
+    assert vendor in _referenced_entity_ids(dashboard), (
+        "no card conditions on vendor reachability"
+    )
+    assert DASHBOARD.read_text().count(vendor) > 1, (
+        "the liveness chip does not consult the vendor sensor, so a stale "
+        "dashboard still cannot say which silence it is"
+    )
+
+
 def test_no_real_device_id_appears_anywhere_in_the_dashboard():
     """Not just in entity ids -- anywhere, comments included.
 
@@ -124,7 +160,7 @@ def test_the_dashboard_ships_without_a_real_device_id(dashboard):
     offenders = sorted(
         entity_id
         for entity_id in _referenced_entity_ids(dashboard)
-        if PLACEHOLDER not in entity_id
+        if PLACEHOLDER not in entity_id and entity_id not in SERVICE_ENTITY_IDS
     )
 
     assert offenders == [], (
