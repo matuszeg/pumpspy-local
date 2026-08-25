@@ -130,7 +130,8 @@ class PumpspyRuntime:
             "devices": {
                 device_id: device.to_stored()
                 for device_id, device in self.devices.items()
-            }
+            },
+            "local_auth": self.local_auth.to_stored(),
         }
 
     def request_save(self) -> None:
@@ -197,11 +198,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Restore what the device only tells us when it changes. Without this a
     # restart leaves the alarms reading unknown until the next real event.
-    for device_id, stored in (await store.async_load() or {}).get("devices", {}).items():
+    saved = await store.async_load() or {}
+    for device_id, stored in saved.get("devices", {}).items():
         restored = DeviceState.from_stored(device_id, stored)
         restored.flow_rate = runtime.flow_rate
         runtime.devices[device_id] = restored
         _LOGGER.debug("restored device %s", device_id)
+
+    # Restored too, or a restart during an outage leaves the sensor reading off
+    # while the device is still carrying a token minted here -- denying
+    # responsibility for the vendor rejections it exists to explain.
+    runtime.local_auth = LocalAuth.from_stored(
+        saved.get("local_auth"), now=dt_util.utcnow()
+    )
+    if runtime.local_auth.issued:
+        _LOGGER.info(
+            "the device may still be carrying a token minted here at %s",
+            runtime.local_auth.issued_at,
+        )
 
     def _record(runtime: PumpspyRuntime, parsed: object) -> None:
         """Fold a parsed message into device state and tell the entities."""
@@ -334,6 +348,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             # some unrelated forward happens to dispatch again, which is
             # exactly the moment recovery is being watched for.
             runtime.local_auth.clear()
+            runtime.request_save()
             async_dispatcher_send(hass, SIGNAL_VENDOR, entry.entry_id)
         elif should_mint(runtime.vendor.reachable, status):
             _LOGGER.warning(
@@ -341,6 +356,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 "locally so it keeps reporting"
             )
             body = runtime.local_auth.mint(dt_util.utcnow())
+            # Asked for here rather than left to telemetry: a mint is the one
+            # thing worth remembering across the sort of event that causes an
+            # outage, and telemetry may not arrive again before it.
+            runtime.request_save()
             async_dispatcher_send(hass, SIGNAL_VENDOR, entry.entry_id)
             return web.Response(
                 status=200, body=body, headers={"Content-Type": AUTH_CONTENT_TYPE}

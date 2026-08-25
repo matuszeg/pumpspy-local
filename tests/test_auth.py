@@ -14,11 +14,12 @@ faked.
 """
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from custom_components.pumpspy_local.core.auth import (
     AUTH_CONTENT_TYPE,
+    DEVICE_REAUTH_INTERVAL_HOURS,
     LocalAuth,
     should_mint,
 )
@@ -125,3 +126,76 @@ def test_a_real_token_clears_the_record():
 
 def test_the_content_type_is_the_one_the_vendor_sends():
     assert AUTH_CONTENT_TYPE == "application/json;charset=UTF-8"
+
+
+def test_a_minted_token_survives_a_restart():
+    """The sensor's whole job is to explain the rejections that follow a mint.
+
+    Keeping it in the runtime alone meant a restart mid-outage left it reading
+    off while the device was still carrying our token, denying responsibility
+    at exactly the moment it exists to admit it.
+    """
+    auth = LocalAuth()
+    auth.mint(NOW)
+
+    restored = LocalAuth.from_stored(auth.to_stored(), now=NOW)
+
+    assert restored.issued is True
+    assert restored.issued_at == NOW
+
+
+def test_the_token_itself_is_never_written_down():
+    """Guardrail: the device's credential is relayed, never stored."""
+    auth = LocalAuth()
+    body = json.loads(auth.mint(NOW))
+
+    stored = json.dumps(auth.to_stored())
+
+    assert body["access_token"] not in stored
+    assert body["refresh_token"] not in stored
+
+
+def test_a_token_older_than_the_device_reauthenticates_is_not_restored():
+    """The device replaces our token on its own four-hourly clock.
+
+    If Home Assistant was down that long the device re-authenticated through
+    the shim and the vendor gave it a real one, so claiming the rejections are
+    ours would be inventing a signal rather than restoring one.
+    """
+    auth = LocalAuth()
+    auth.mint(NOW)
+    much_later = NOW + timedelta(hours=DEVICE_REAUTH_INTERVAL_HOURS, minutes=1)
+
+    restored = LocalAuth.from_stored(auth.to_stored(), now=much_later)
+
+    assert restored.issued is False
+    assert restored.issued_at is None
+
+
+def test_a_token_within_that_window_is_still_believed():
+    auth = LocalAuth()
+    auth.mint(NOW)
+    shortly_after = NOW + timedelta(minutes=20)
+
+    restored = LocalAuth.from_stored(auth.to_stored(), now=shortly_after)
+
+    assert restored.issued is True
+
+
+def test_nothing_stored_means_nothing_was_minted():
+    """A first run, or an upgrade from a version that stored no such thing."""
+    assert LocalAuth.from_stored({}, now=NOW).issued is False
+    assert LocalAuth.from_stored(None, now=NOW).issued is False
+
+
+def test_an_unreadable_timestamp_is_treated_as_no_token():
+    """Storage written by hand, or by a future version. Never raise on it."""
+    assert LocalAuth.from_stored({"issued_at": "not a date"}, now=NOW).issued is False
+
+
+def test_a_cleared_token_stores_as_cleared():
+    auth = LocalAuth()
+    auth.mint(NOW)
+    auth.clear()
+
+    assert LocalAuth.from_stored(auth.to_stored(), now=NOW).issued is False

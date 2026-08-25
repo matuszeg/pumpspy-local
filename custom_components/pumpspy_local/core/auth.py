@@ -26,10 +26,13 @@ unreachable by the measured signal in ``vendor.py``.
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
+
+_LOGGER = logging.getLogger(__name__)
 
 AUTH_CONTENT_TYPE = "application/json;charset=UTF-8"
 
@@ -39,6 +42,20 @@ AUTH_CONTENT_TYPE = "application/json;charset=UTF-8"
 # nothing here has to carry a lifetime.
 TOKEN_TYPE = "bearer"
 SCOPE = "read"
+
+# How long a minted token can be believed across a restart.
+#
+# The device re-authenticates every four hours in normal operation, answered
+# 200 (measured 2026-08-20 and 2026-08-21; the minute drifts, so it is four
+# hours from the last re-anchor rather than a wall-clock slot). If Home
+# Assistant was down for longer than that, the shim sent the device to the
+# vendor, the vendor issued it a real token, and ours is gone. Restoring the
+# flag then would claim credit for rejections that are not ours, which is a
+# worse fault in a diagnostic than the silence it replaces.
+#
+# In practice this rarely bites: during an outage the device asks again every
+# nine minutes or so and each mint restamps the record.
+DEVICE_REAUTH_INTERVAL_HOURS = 4
 
 
 def _new_token() -> str:
@@ -89,3 +106,39 @@ class LocalAuth:
     def clear(self) -> None:
         """Note that the device is back on a token the vendor issued."""
         self.issued_at = None
+
+    def to_stored(self) -> dict:
+        """What survives a restart.
+
+        The timestamp only. The token itself is the device's credential for
+        the vendor: it is relayed and then forgotten, and writing it to disk
+        would turn a proxy into a credential store.
+        """
+        return {
+            "issued_at": self.issued_at.isoformat()
+            if self.issued_at is not None
+            else None
+        }
+
+    @classmethod
+    def from_stored(cls, stored: dict | None, now: datetime) -> LocalAuth:
+        """Rebuild from a stored payload, discarding one too old to believe.
+
+        Never raises. This runs during setup, and a storage file that cannot
+        be read is not a reason to leave the integration unloaded.
+        """
+        issued_at = (stored or {}).get("issued_at")
+        if not issued_at:
+            return cls()
+
+        try:
+            when = datetime.fromisoformat(issued_at)
+        except (TypeError, ValueError):
+            _LOGGER.debug("unreadable stored issued_at %r", issued_at)
+            return cls()
+
+        if now - when >= timedelta(hours=DEVICE_REAUTH_INTERVAL_HOURS):
+            _LOGGER.debug("stored token from %s is too old to still be held", when)
+            return cls()
+
+        return cls(issued_at=when)
