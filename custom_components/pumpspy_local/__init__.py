@@ -51,6 +51,7 @@ from .core.forward import (
 )
 from .core.firmware import FirmwareChecker, Reply, Verdict, classify
 from .core.gallons import DEFAULT_FLOW_RATE
+from .core.novelty import Novelties
 from .core.parser import BbsReading, Ping, parse_request
 from .core.state import DeviceState
 from .core.upstream import (
@@ -119,6 +120,8 @@ class PumpspyRuntime:
     # could legitimately be offered different firmware and must not share a
     # cached reply.
     firmware: dict[str, FirmwareChecker] = field(default_factory=dict)
+    # What we have already said is unfamiliar, so we do not say it again.
+    novelties: Novelties = field(default_factory=Novelties)
 
     def firmware_for(self, device_id: str) -> FirmwareChecker:
         if device_id not in self.firmware:
@@ -403,7 +406,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # would be missing the point. parse_request never raises, and this is a
         # few microseconds of pure CPU on a ~100 byte body, so it stays inline
         # rather than becoming a task that would only add scheduling overhead.
-        _record(runtime, parse_request(proxied.path, proxied.body))
+        parsed = parse_request(proxied.path, proxied.body)
+        # Everything the device says reaches one of these two. _record keeps
+        # what we understand; runtime.novelties says so, once, when we do not.
+        _record(runtime, parsed)
+        runtime.novelties.note(proxied.path, parsed)
 
         if response is None:
             # Not a synthetic 200: telling the device its event was delivered

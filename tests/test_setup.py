@@ -207,6 +207,39 @@ async def test_a_parse_failure_does_not_break_forwarding(hass, upstream, free_po
     assert runtime_of(hass, entry).devices == {}
 
 
+async def test_a_message_nothing_reads_still_says_so_once(
+    hass, upstream, free_port, caplog
+):
+    """Through the listener, not just the parser.
+
+    Pump alerts have parsed cleanly for months and then been dropped without a
+    word, which is the whole of #13: the wiring is the part that was missing,
+    so the wiring is what this drives. Twice, because saying it every time an
+    unread message arrives is how a warning gets filtered out -- and this one
+    arrives about once a day on the live install.
+    """
+    await _setup(hass, upstream, free_port)
+    body = (
+        Path(__file__).parent / "fixtures" / "pumpalert_idPumpAlertType.txt"
+    ).read_bytes()
+
+    async with ClientSession() as session:
+        for _ in range(2):
+            async with session.post(
+                f"http://127.0.0.1:{free_port}/pump_outlet_alerts", data=body
+            ) as response:
+                assert response.status == 200
+    await hass.async_block_till_done()
+
+    said = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.WARNING and "alert type" in record.getMessage()
+    ]
+    assert len(said) == 1
+    assert "105" in said[0]
+
+
 async def test_a_reading_creates_a_battery_voltage_entity(hass, upstream, free_port):
     """Devices are not configured; they are adopted when they first report."""
     await _setup(hass, upstream, free_port)

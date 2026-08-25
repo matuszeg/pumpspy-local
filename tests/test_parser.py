@@ -144,10 +144,17 @@ def test_a_field_we_do_not_know_about_does_not_break_the_rest():
     assert reading.battery_volts == 13.324
 
 
-def test_unknown_fields_are_logged_so_a_firmware_change_gets_noticed(caplog):
-    parse_bbs_json(_bbs_body(battery_voltage=13324, brand_new_field=7))
+def test_unknown_fields_are_carried_so_a_firmware_change_gets_noticed():
+    """Carried, not logged here.
 
-    assert "brand_new_field" in caplog.text
+    Saying something about an unfamiliar message is one decision, made once, in
+    ``core/novelty.py`` -- it is the thing that knows this arrives repeatedly
+    and should be said only the first time.
+    """
+    reading = parse_bbs_json(_bbs_body(battery_voltage=13324, brand_new_field=7))
+
+    assert reading.unknown_fields == ("brand_new_field",)
+    assert reading.battery_volts == 13.324
 
 
 def test_parse_request_returns_none_rather_than_raising_on_junk():

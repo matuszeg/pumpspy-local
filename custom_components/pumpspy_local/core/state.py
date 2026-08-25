@@ -16,8 +16,11 @@ from .parser import BbsReading, Ping, PumpRun
 
 BACKUP_PUMP = "backup"
 
-# ``idpings_data_type`` 1 is Wi-Fi RSSI. Type 3 has been seen (~5.86) but nobody
-# has confirmed what it means, so it is deliberately not mapped to anything.
+# ``idpings_data_type`` 1 is Wi-Fi RSSI. Type 3 is motor current in amps, and it
+# is deliberately not kept: it duplicates ``mamp`` from the run message, which we
+# already record and already distrust (two identical self-tests reported 5.54 A
+# and 11.83 A). Arriving unread is not the same as arriving unnoticed, though --
+# see ``core/novelty.py``.
 PING_WIFI_RSSI = 1
 
 # The device reports motor_fail once and never sends a clearing message; the

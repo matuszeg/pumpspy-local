@@ -7,6 +7,9 @@ Shape notes, all from real captures:
   so every field on :class:`BbsReading` is optional.
 - ``POST /pings`` and ``POST /pump_outlet_alerts`` are JSON *arrays*.
 - ``/pump_outlet_alerts`` uses a camelCase schema of its own.
+- ``GET /tm`` has no body worth reading in either direction here: it is the
+  device asking the vendor for the time, answered ``{"utctime": <ms>}``. That
+  is why its own timestamps sit within a second of ours.
 - Voltages are millivolts on the wire, and run durations are tenths of a second.
 - Every message carries ``utcunixtime``, the device's own clock in milliseconds.
   It is the only timestamp that is not ours: everything else is arrival time.
@@ -49,15 +52,21 @@ class BbsReading:
     high_water: bool | None = None
     motor_fail: bool | None = None
     pump_run: PumpRun | None = None
+    # Fields the device sent that this parser does not know. Carried rather
+    # than logged here so that one thing decides what is worth saying about an
+    # unfamiliar message, and says it once. See ``core/novelty.py``.
+    unknown_fields: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
 class Ping:
     """One ``/pings`` entry.
 
-    ``data_type`` 1 is Wi-Fi RSSI in dBm. Type 3 has been observed (~5.86) but
-    its meaning is unconfirmed, so the value is carried through uninterpreted
-    rather than guessed at.
+    ``data_type`` 1 is Wi-Fi RSSI in dBm. Type 3 is motor current in amps: a
+    capture of a hose-fed backup run reported ``5.860000`` here beside
+    ``"mamp": 5856`` in the run message, the same figure in different units. It
+    is event-driven rather than periodic, arriving alongside pump activity,
+    where RSSI arrives every two minutes come what may.
     """
 
     device_id: str
@@ -70,8 +79,14 @@ class PumpAlert:
     """One ``/pump_outlet_alerts`` entry.
 
     This endpoint spells things in camelCase (``deviceID``, ``utcunixTime``)
-    unlike the rest of the protocol, which suggests a newer subsystem. The
-    meaning of ``alert_type`` is not yet known.
+    unlike the rest of the protocol, which suggests a newer subsystem.
+
+    It is not a pump event. All twelve occurrences in fourteen days of the
+    shim's access log land inside the device's reconnect burst, in the same
+    second as ``/tm``, ``/oauth/token`` and ``/bbs_parameters``. The one
+    captured body carries ``idPumpAlertType: 105``, ``recordNumber: 0`` and
+    ``value: 0``, and the vendor answers ``{"numRows":-1}``, so it reads as
+    "nothing to report" for an outlet subsystem this hardware may not have.
     """
 
     device_id: str
@@ -138,10 +153,6 @@ def parse_bbs_json(raw: bytes) -> BbsReading:
     outer = json.loads(raw)
     inner = json.loads(outer["json"])
 
-    unknown = set(inner) - _KNOWN_BBS_FIELDS
-    if unknown:
-        _LOGGER.info("unknown /bbs_json fields %s", sorted(unknown))
-
     return BbsReading(
         device_id=str(outer["deviceid"]),
         device_time=_device_time(outer.get("utcunixtime")),
@@ -151,6 +162,7 @@ def parse_bbs_json(raw: bytes) -> BbsReading:
         high_water=_flag(inner.get("high_water")),
         motor_fail=_flag(inner.get("motor_fail")),
         pump_run=_pump_run(inner),
+        unknown_fields=tuple(sorted(set(inner) - _KNOWN_BBS_FIELDS)),
     )
 
 
@@ -199,6 +211,11 @@ _PARSERS = {
     "/pings": parse_pings,
     "/pump_outlet_alerts": parse_pump_alerts,
 }
+
+
+# The endpoints this module reads, for anything that needs to tell "no parser"
+# apart from "the parser failed".
+PARSER_PATHS = frozenset(_PARSERS)
 
 
 def parse_request(path: str, body: bytes) -> ParsedMessage | None:
