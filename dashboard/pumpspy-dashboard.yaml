@@ -12,7 +12,9 @@
 # 3. Find-and-replace `your_device_id` with your own device id. It is in your
 #    entity ids -- look at any entity this integration made, for example
 #    `sensor.pumpspy_123456789012345_battery_voltage`, and take the number in
-#    the middle.
+#    the middle. One entity is deliberately left alone by that replace:
+#    `binary_sensor.pumpspy_local_vendor_reachable` belongs to the integration
+#    itself rather than to a pump, so it has no device id in it.
 #
 # The pit drawing is to scale on the vertical axis, but it is scaled to *one
 # particular pit* -- 16 inches deep, floats at 7, 12 and 14 inches. If yours
@@ -240,6 +242,16 @@ views:
               # restarts the device took over 7 minutes to resume -- it appears
               # to back off once it has been refused -- so anything tighter
               # cries wolf on every restart.
+              #
+              # When it does go stale it names the suspect, because a vendor
+              # outage and a broken redirect look identical from here: both end
+              # with every chip frozen. The vendor sensor is the only thing
+              # that separates them, so this is where it earns its place. Note
+              # the past tense in "vendor was OK". Nothing is forwarded while
+              # the device is quiet, so nothing is being learned either, and
+              # that verdict is the last one we got rather than a live one. It
+              # is still the useful one: it was taken at about the moment the
+              # reports stopped, which is exactly the question being asked.
               - type: template
                 entity: sensor.pumpspy_your_device_id_battery_voltage
                 icon: >-
@@ -251,7 +263,45 @@ views:
                   {{ 'green' if age.total_seconds() < 420 else 'red' }}
                 content: >-
                   {% set age = now() - states[entity].last_reported %}
-                  {{ 'Live' if age.total_seconds() < 420 else 'No data' }}
+                  {% set vendor =
+                     states('binary_sensor.pumpspy_local_vendor_reachable') %}
+                  {% if age.total_seconds() < 420 %}Live
+                  {% elif vendor == 'off' %}No data, vendor down
+                  {% elif vendor == 'on' %}No data, vendor was OK
+                  {% else %}No data{% endif %}
+
+          # Deliberately not a permanent tile. Vendor reachability is on
+          # essentially all the time, and something that reads green for months
+          # is something you stop reading, so it appears only while it has
+          # anything to say. Plain markdown for the same reason as the alerts
+          # above: it should not depend on a HACS component loading.
+          - type: conditional
+            conditions:
+              - condition: state
+                entity: binary_sensor.pumpspy_local_vendor_reachable
+                state: "off"
+            card:
+              type: markdown
+              content: >-
+                ### ☁️ PumpSpy isn't answering
+
+
+                Your sump is still being watched. Everything on this dashboard
+                comes from the device over your own network, so the alerts, the
+                battery figures and the history are all unaffected.
+
+
+                What's stopped is the phone app. Nothing is getting through to
+                PumpSpy, so it can't alert you and it may well show the monitor
+                as offline. Until this clears, Home Assistant is the only thing
+                watching your basement, and that's worth knowing tonight rather
+                than the next time it rains.
+
+
+                It usually fixes itself within the hour. The device would
+                normally give up and stop reporting to anyone during an outage
+                this long, so this integration answers its login itself to keep
+                it talking.
 
           # ── The backup pump ran ────────────────────────────────────────────
           #
