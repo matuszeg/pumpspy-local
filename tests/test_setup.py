@@ -1186,3 +1186,81 @@ async def test_a_reload_releases_the_port_and_binds_it_again(
             f"http://127.0.0.1:{free_port}/bbs_json", data=b'{"deviceid":"X"}'
         ) as response:
             assert response.status == 200
+
+
+async def test_a_minted_token_is_still_remembered_after_a_restart(
+    hass, upstream, free_port
+):
+    """The sensor exists to explain the rejections a mint causes.
+
+    Keeping the record in the runtime alone meant a restart during an outage
+    left it off while the device was still carrying our token, denying
+    responsibility at the one moment it is meant to admit it.
+    """
+    entry = await _setup(hass, upstream, free_port)
+    runtime = runtime_of(hass, entry)
+    for _ in range(4):
+        runtime.vendor.record_failure("boom")
+    upstream.reply["status"] = 401
+
+    await _send_raw(free_port, TOKEN_REQUEST)
+    await hass.async_block_till_done()
+    assert runtime.local_auth.issued is True
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert runtime_of(hass, entry).local_auth.issued is True
+    issued = [
+        state
+        for state in hass.states.async_all("binary_sensor")
+        if state.entity_id.endswith("local_token_issued")
+    ]
+    assert issued[0].state == "on"
+
+
+async def test_the_minted_token_is_written_out_without_waiting_for_telemetry(
+    hass, upstream, free_port, hass_storage
+):
+    """Minting has to ask for the save itself.
+
+    Only telemetry used to request one, so a mint followed by a hard power cut
+    -- which is the sort of thing that causes an outage in the first place --
+    would have been forgotten entirely.
+    """
+    entry = await _setup(hass, upstream, free_port)
+    runtime = runtime_of(hass, entry)
+    for _ in range(4):
+        runtime.vendor.record_failure("boom")
+    upstream.reply["status"] = 401
+
+    await _send_raw(free_port, TOKEN_REQUEST)
+    await hass.async_block_till_done()
+    await runtime.store.async_save(runtime.as_stored())
+
+    stored = hass_storage[f"{DOMAIN}.{entry.entry_id}"]["data"]
+    assert stored["local_auth"]["issued_at"] is not None
+
+
+async def test_a_real_token_is_remembered_as_cleared(hass, upstream, free_port):
+    """Recovery has to survive a restart too, or the sensor sticks on."""
+    entry = await _setup(hass, upstream, free_port)
+    runtime = runtime_of(hass, entry)
+    for _ in range(4):
+        runtime.vendor.record_failure("boom")
+    upstream.reply["status"] = 401
+    await _send_raw(free_port, TOKEN_REQUEST)
+    await hass.async_block_till_done()
+
+    upstream.reply["status"] = 200
+    await _send_raw(free_port, TOKEN_REQUEST)
+    await hass.async_block_till_done()
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert runtime_of(hass, entry).local_auth.issued is False
