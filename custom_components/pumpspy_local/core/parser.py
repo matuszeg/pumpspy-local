@@ -81,12 +81,21 @@ class PumpAlert:
     This endpoint spells things in camelCase (``deviceID``, ``utcunixTime``)
     unlike the rest of the protocol, which suggests a newer subsystem.
 
-    It is not a pump event. All twelve occurrences in fourteen days of the
-    shim's access log land inside the device's reconnect burst, in the same
-    second as ``/tm``, ``/oauth/token`` and ``/bbs_parameters``. The one
-    captured body carries ``idPumpAlertType: 105``, ``recordNumber: 0`` and
-    ``value: 0``, and the vendor answers ``{"numRows":-1}``, so it reads as
-    "nothing to report" for an outlet subsystem this hardware may not have.
+    It arrives with pump activity, inside a burst that also carries ``/tm``,
+    ``/oauth/token`` and ``/bbs_parameters``. Ten of the thirteen occurrences in
+    fourteen days of the shim's access log are followed by a ``/bbs_json`` run
+    report 10 to 12 seconds later, and one of those resolved into a recorded
+    10.0 s backup self-test. The three that were not all sit beside repeated
+    login attempts. The one captured body carries ``idPumpAlertType: 105``,
+    ``recordNumber: 0`` and ``value: 0``, and the vendor answers
+    ``{"numRows":-1}``.
+
+    **Do not read that lead time as "the pump is running now" yet.** Every
+    backup run ever observed here lasted 10.0 to 12.2 seconds, so an alert sent
+    when the pump starts and an alert sent with a fixed delay in front of the
+    report look exactly alike. Only a run of some other length tells them
+    apart, and this pit does not hold water: the primary has never run, and the
+    question waits on a wetter spring rather than on any work.
     """
 
     device_id: str
