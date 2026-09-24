@@ -1297,3 +1297,107 @@ async def test_a_real_token_is_remembered_as_cleared(hass, upstream, free_port):
     await hass.async_block_till_done()
 
     assert runtime_of(hass, entry).local_auth.issued is False
+
+
+async def test_a_vendor_failure_is_not_a_warning_but_the_outage_is_logged_once(
+    hass, free_port, caplog
+):
+    """The vendor hangs up on about one request in ten on a healthy day.
+
+    Logging each of those as a warning put 491 lines in four days into the
+    live log for a fault the retry already absorbs. What deserves a line is
+    the verdict changing, once, which is also what the reachability sensor
+    reports.
+    """
+    caplog.set_level(logging.DEBUG)
+    entry = await _setup_pointing_at(hass, DEAD_UPSTREAM, free_port)
+    body = (Path(__file__).parent / "fixtures" / "bbs_json_plain_battery.txt").read_bytes()
+
+    async with ClientSession() as session:
+        for _ in range(6):
+            async with session.post(
+                f"http://127.0.0.1:{free_port}/bbs_json", data=body
+            ):
+                pass
+    await hass.async_block_till_done()
+
+    vendor_lines = [
+        r
+        for r in caplog.records
+        if r.name.startswith("custom_components.pumpspy_local")
+        and "vendor" in r.getMessage()
+    ]
+    assert not [r for r in vendor_lines if r.levelno >= logging.WARNING]
+    assert [r.getMessage() for r in vendor_lines if r.levelno == logging.INFO] == [
+        f"vendor unreachable after 4 failed requests, last: "
+        f"{runtime_of(hass, entry).vendor.last_error}"
+    ]
+
+
+async def test_the_vendor_coming_back_is_logged_once(hass, upstream, free_port, caplog):
+    caplog.set_level(logging.INFO)
+    entry = await _setup(hass, upstream, free_port)
+    runtime = runtime_of(hass, entry)
+    for _ in range(4):
+        runtime.vendor.record_failure("boom")
+
+    async with ClientSession() as session:
+        for _ in range(4):
+            async with session.post(
+                f"http://127.0.0.1:{free_port}/pings", data=b"[]"
+            ):
+                pass
+    await hass.async_block_till_done()
+
+    assert runtime.vendor.reachable is True
+    assert caplog.text.count("vendor reachable again") == 1
+
+
+async def test_an_older_home_assistant_still_gets_the_link_the_old_way(
+    hass, upstream, free_port
+):
+    """Releases before via_device_id only understand the identifiers form."""
+    with patch("custom_components.pumpspy_local.entity._HAS_VIA_DEVICE_ID", False):
+        entry = await _setup(hass, upstream, free_port)
+        body = (
+            Path(__file__).parent / "fixtures" / "bbs_json_plain_battery.txt"
+        ).read_bytes()
+        async with ClientSession() as session:
+            async with session.post(
+                f"http://127.0.0.1:{free_port}/bbs_json", data=body
+            ):
+                pass
+        await hass.async_block_till_done()
+
+    registry = dr.async_get(hass)
+    service = registry.async_get_device(identifiers={(DOMAIN, entry.entry_id)})
+    pump = registry.async_get_device(identifiers={(DOMAIN, "11111111111111")})
+    assert pump.via_device_id == service.id
+
+
+async def test_naming_the_parent_does_not_look_it_up_in_the_registry(
+    hass, upstream, free_port
+):
+    """Home Assistant 2026.9 deprecated async_get_device, and 2027.8 removes it.
+
+    The id is already in hand from registering the service device, so there
+    is nothing to look up.
+    """
+    with patch.object(
+        dr.DeviceRegistry,
+        "async_get_device",
+        side_effect=AssertionError("async_get_device is deprecated"),
+    ):
+        entry = await _setup(hass, upstream, free_port)
+        body = (
+            Path(__file__).parent / "fixtures" / "bbs_json_plain_battery.txt"
+        ).read_bytes()
+        async with ClientSession() as session:
+            async with session.post(
+                f"http://127.0.0.1:{free_port}/bbs_json", data=body
+            ):
+                pass
+        await hass.async_block_till_done()
+
+    assert runtime_of(hass, entry).service_device_id is not None
+    assert hass.states.get("sensor.pumpspy_11111111111111_battery_voltage") is not None
