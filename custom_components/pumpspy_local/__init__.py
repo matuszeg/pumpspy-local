@@ -122,6 +122,9 @@ class PumpspyRuntime:
     firmware: dict[str, FirmwareChecker] = field(default_factory=dict)
     # What we have already said is unfamiliar, so we do not say it again.
     novelties: Novelties = field(default_factory=Novelties)
+    # Registry id of the service device the pumps hang off, set during setup
+    # before any platform, so an entity can name its parent without a lookup.
+    service_device_id: str | None = None
 
     def firmware_for(self, device_id: str) -> FirmwareChecker:
         if device_id not in self.firmware:
@@ -192,11 +195,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Assistant has not seen yet silently loses the link -- and on a restart
     # every pump entity is built from restored state before any message
     # arrives, with the platforms set up concurrently, so it would be a race.
-    dr.async_get(hass).async_get_or_create(
-        config_entry_id=entry.entry_id,
-        identifiers={(DOMAIN, entry.entry_id)},
-        entry_type=dr.DeviceEntryType.SERVICE,
-        name=SERVICE_DEVICE_NAME,
+    runtime.service_device_id = (
+        dr.async_get(hass)
+        .async_get_or_create(
+            config_entry_id=entry.entry_id,
+            identifiers={(DOMAIN, entry.entry_id)},
+            entry_type=dr.DeviceEntryType.SERVICE,
+            name=SERVICE_DEVICE_NAME,
+        )
+        .id
     )
 
     # Restore what the device only tells us when it changes. Without this a
@@ -261,6 +268,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         into the listener: the device retries, and what we learned from the
         message is ours either way.
         """
+        was_reachable = runtime.vendor.reachable
         try:
             target = await upstream_address.target(dt_util.utcnow())
             response = await forward(session, target, proxied)
@@ -269,7 +277,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.error("not forwarding: %s", err)
             runtime.vendor.record_failure(str(err))
         except ClientError as err:
-            _LOGGER.warning("could not reach the vendor: %s", err)
+            # Debug, not warning: the vendor hangs up on about one request in
+            # ten even on a good day, and the retry in forward() already covers
+            # it. What is worth a line in the log is the verdict changing,
+            # below, which is also what the reachability sensor reports.
+            _LOGGER.debug("could not reach the vendor: %s", err)
             runtime.vendor.record_failure(str(err))
         except TimeoutError:
             # Named separately because a timeout is *not* a ClientError, so it
@@ -280,15 +292,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             # behind. A bare TimeoutError also stringifies to nothing, so the
             # reason is written out rather than passed through.
             reason = f"no answer within {VENDOR_TIMEOUT_SECONDS}s"
-            _LOGGER.warning("could not reach the vendor: %s", reason)
+            _LOGGER.debug("could not reach the vendor: %s", reason)
             runtime.vendor.record_failure(reason)
         else:
             runtime.vendor.record_success(dt_util.utcnow())
+            _log_vendor_change(was_reachable)
             async_dispatcher_send(hass, SIGNAL_VENDOR, entry.entry_id)
             return response
 
+        _log_vendor_change(was_reachable)
         async_dispatcher_send(hass, SIGNAL_VENDOR, entry.entry_id)
         return None
+
+    def _log_vendor_change(was_reachable: bool | None) -> None:
+        """Say so once when the verdict on the vendor flips, not per request."""
+        now_reachable = runtime.vendor.reachable
+        if now_reachable is False and was_reachable is not False:
+            _LOGGER.info(
+                "vendor unreachable after %d failed requests, last: %s",
+                runtime.vendor.consecutive_failures,
+                runtime.vendor.last_error,
+            )
+        elif now_reachable is True and was_reachable is False:
+            _LOGGER.info("vendor reachable again")
 
     async def _handle_firmware_check(proxied: ProxyRequest) -> web.Response:
         """Answer the device's firmware poll, asking upstream only when due.

@@ -293,3 +293,38 @@ def test_a_body_that_is_genuinely_not_json_still_warns(caplog):
     """The repair must not turn a real problem into a silent one."""
     assert parse_request("/pings", b"<html>nope</html>") is None
     assert "could not parse" in caplog.text
+
+
+def test_a_ping_with_no_finite_value_is_dropped_not_the_whole_message(caplog):
+    """A ping whose reading is non-finite has nothing to report, so skip it.
+
+    The repair turns every non-finite number into null, and a null value used
+    to fail float() and throw away the whole body -- other pings included --
+    with a warning and a traceback that blamed the clock instead.
+    """
+    body = (
+        b'[{"deviceid": 11111111111111, "utcunixtime": 1.#INF00,'
+        b'"idpings_data_type": 1, "value": -1.#IND00 },'
+        b'{"deviceid": 11111111111111, "utcunixtime": 1786665474000,'
+        b'"idpings_data_type": 3, "value": 5.860000 }]'
+    )
+    with caplog.at_level("DEBUG"):
+        pings = parse_request("/pings", body)
+
+    assert pings is not None
+    assert [(p.data_type, p.value) for p in pings] == [(3, 5.86)]
+    assert not [r for r in caplog.records if r.levelname == "WARNING"]
+
+
+def test_an_unparseable_body_is_quoted_in_the_warning(caplog):
+    """Without the bytes a parse failure cannot be diagnosed after the fact."""
+    parse_request("/pings", b'[{"deviceid": 1, "value": 5.8.6 }]')
+
+    assert "5.8.6" in caplog.text
+
+
+def test_a_huge_unparseable_body_is_quoted_only_in_part(caplog):
+    parse_request("/pings", b"x" * 5000)
+
+    assert "x" * 200 in caplog.text
+    assert "x" * 1000 not in caplog.text

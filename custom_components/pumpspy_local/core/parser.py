@@ -176,7 +176,12 @@ def parse_bbs_json(raw: bytes) -> BbsReading:
 
 
 def parse_pings(raw: bytes) -> list[Ping]:
-    """Parse a ``/pings`` body, which is an array of entries."""
+    """Parse a ``/pings`` body, which is an array of entries.
+
+    An entry whose value is null -- which is what a repaired non-finite reading
+    becomes -- carries nothing to report, so it is skipped rather than allowed
+    to fail float() and take the rest of the body with it.
+    """
     return [
         Ping(
             device_id=str(entry["deviceid"]),
@@ -184,6 +189,7 @@ def parse_pings(raw: bytes) -> list[Ping]:
             value=float(entry["value"]),
         )
         for entry in json.loads(raw)
+        if entry.get("value") is not None
     ]
 
 
@@ -214,6 +220,10 @@ def parse_pump_alerts(raw: bytes) -> list[PumpAlert]:
 # this protocol's real values, and the substitution only ever runs on a body
 # that has already failed to parse.
 _NON_FINITE = re.compile(rb"-?\d+\.#[A-Za-z]+\d*")
+
+# Enough for any real /pings or /pump_outlet_alerts body and the start of a
+# /bbs_json one, without letting a garbage request flood the log.
+_QUOTED_BYTES = 400
 
 _PARSERS = {
     "/bbs_json": parse_bbs_json,
@@ -255,5 +265,12 @@ def parse_request(path: str, body: bytes) -> ParsedMessage | None:
                     "%s carried a non-finite number, read without it", path
                 )
                 return parsed
-        _LOGGER.warning("could not parse %s body", path, exc_info=err)
+        # The body is quoted because nothing else can say what went wrong once
+        # the message has gone. None of the parsed endpoints carries a secret.
+        _LOGGER.warning(
+            "could not parse %s body: %r",
+            path,
+            body[:_QUOTED_BYTES],
+            exc_info=err,
+        )
         return None
