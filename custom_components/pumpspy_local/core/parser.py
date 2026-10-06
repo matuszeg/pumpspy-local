@@ -129,7 +129,8 @@ def _device_time(milliseconds: object) -> datetime | None:
     more than the timestamp, and a firmware that changed this field must not
     cost us the battery voltage beside it.
     """
-    if milliseconds is None:
+    # 0 is how the device says its clock is unset, so it means unknown, not 1970.
+    if milliseconds is None or milliseconds == 0:
         return None
     try:
         return datetime.fromtimestamp(float(milliseconds) / 1000, timezone.utc)
@@ -221,6 +222,14 @@ def parse_pump_alerts(raw: bytes) -> list[PumpAlert]:
 # that has already failed to parse.
 _NON_FINITE = re.compile(rb"-?\d+\.#[A-Za-z]+\d*")
 
+# The device also writes an unset clock as ``0000``. JSON forbids a leading
+# zero, so that too costs the whole message, and on the live install it was
+# every parse failure left once the non-finite ones were handled. Only a number
+# in value position is touched -- after ``:``, ``[`` or ``,`` -- and only its
+# redundant zeros, so ``0000`` reads as 0 and ``0123`` as 123. The digits after
+# a decimal point are never preceded by one of those, so ``5.860000`` is safe.
+_LEADING_ZEROS = re.compile(rb"([:\[,]\s*-?)0+(?=\d)")
+
 # Enough for any real /pings or /pump_outlet_alerts body and the start of a
 # /bbs_json one, without letting a garbage request flood the log.
 _QUOTED_BYTES = 400
@@ -252,17 +261,17 @@ def parse_request(path: str, body: bytes) -> ParsedMessage | None:
     try:
         return parser(body)
     except Exception as err:
-        repaired = _NON_FINITE.sub(b"null", body)
+        repaired = _LEADING_ZEROS.sub(rb"\1", _NON_FINITE.sub(b"null", body))
         if repaired != body:
             try:
                 parsed = parser(repaired)
             except Exception:
-                # The non-finite value was not the only thing wrong with it.
+                # The malformed number was not the only thing wrong with it.
                 # Fall through and report the original failure, not this one.
                 pass
             else:
                 _LOGGER.debug(
-                    "%s carried a non-finite number, read without it", path
+                    "%s carried a malformed number, read around it", path
                 )
                 return parsed
         # The body is quoted because nothing else can say what went wrong once

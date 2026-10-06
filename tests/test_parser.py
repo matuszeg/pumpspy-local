@@ -328,3 +328,43 @@ def test_a_huge_unparseable_body_is_quoted_only_in_part(caplog):
 
     assert "x" * 200 in caplog.text
     assert "x" * 1000 not in caplog.text
+
+
+def test_a_zero_padded_device_clock_does_not_cost_us_the_whole_message():
+    """The device writes an unset clock as ``0000``, which JSON rejects.
+
+    This is the body the live install quoted, with the device id replaced. It
+    was every parse failure left once non-finite clocks were handled.
+    """
+    body = (
+        b'[{"deviceid": 11111111111111, "utcunixtime": 0000,'
+        b'"idpings_data_type": 3, "value": 5.860000 }]'
+    )
+    pings = parse_request("/pings", body)
+
+    assert pings is not None
+    assert pings[0].data_type == 3
+    assert pings[0].value == 5.86
+
+
+def test_a_zero_clock_leaves_the_timestamp_unknown_not_1970():
+    body = (
+        b'{"deviceid": 11111111111111, "utcunixtime": 0000, '
+        b'"json": "{\\"battery_voltage\\": 13324}"}'
+    )
+    reading = parse_request("/bbs_json", body)
+
+    assert reading is not None
+    assert reading.device_time is None
+    assert reading.battery_volts == 13.324
+
+
+def test_only_leading_zeros_are_removed_not_the_digits_of_real_values():
+    body = (
+        b'[{"deviceid": 11111111111111, "utcunixtime": 0001786652606000,'
+        b'"idpings_data_type": 1, "value": -046.000000 }]'
+    )
+    pings = parse_request("/pings", body)
+
+    assert pings is not None
+    assert pings[0].value == -46.0
