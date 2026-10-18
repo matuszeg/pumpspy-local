@@ -1401,3 +1401,63 @@ async def test_naming_the_parent_does_not_look_it_up_in_the_registry(
 
     assert runtime_of(hass, entry).service_device_id is not None
     assert hass.states.get("sensor.pumpspy_11111111111111_battery_voltage") is not None
+
+
+# The device's clock sync in its real shape: a GET that declares a body it
+# never sends, with the trailing space the device leaves on header values.
+TIME_REQUEST = (
+    b"GET /tm HTTP/1.1\r\n"
+    b"Host: www.pumpspy.com:8081 \r\n"
+    b"Content-Type: application/json \r\n"
+    b"Content-Length: 148 \r\n"
+    b"\r\n"
+)
+
+
+async def test_the_clock_sync_is_relayed_untouched_while_the_vendor_is_healthy(
+    hass, upstream, free_port
+):
+    await _setup(hass, upstream, free_port)
+    upstream.reply["status"] = 200
+    upstream.reply["body"] = b'{"utctime":1786659941836}'
+
+    reply = await _send_raw(free_port, TIME_REQUEST)
+
+    assert b"200" in reply.split(b"\r\n")[0]
+    assert b"1786659941836" in reply
+    assert upstream.requests == ["/tm"]
+
+
+async def test_the_clock_sync_is_answered_locally_once_the_vendor_is_unreachable(
+    hass, upstream, free_port
+):
+    """The shape every evening outage since 2026-10-06 has produced."""
+    entry = await _setup(hass, upstream, free_port)
+    runtime = runtime_of(hass, entry)
+    for _ in range(4):
+        runtime.vendor.record_failure("boom")
+    await upstream.close()
+
+    before = dt_util.utcnow().timestamp() * 1000
+    reply = await _send_raw(free_port, TIME_REQUEST)
+    after = dt_util.utcnow().timestamp() * 1000
+
+    head, _, body = reply.partition(b"\r\n\r\n")
+    assert b"200" in head.split(b"\r\n")[0]
+    assert b"application/json;charset=UTF-8" in head
+    # aiohttp may chunk the body; the JSON is the only brace-delimited part.
+    payload = json.loads(body[body.index(b"{") : body.rindex(b"}") + 1])
+    assert before - 1 <= payload["utctime"] <= after + 1
+
+
+async def test_a_failed_clock_sync_gets_a_502_before_any_outage_verdict(
+    hass, upstream, free_port
+):
+    """The vendor drops ~1 request in 10 on a good day; that is not an outage."""
+    entry = await _setup(hass, upstream, free_port)
+    assert runtime_of(hass, entry).vendor.reachable is None
+    await upstream.close()
+
+    reply = await _send_raw(free_port, TIME_REQUEST)
+
+    assert b"502" in reply.split(b"\r\n")[0]
