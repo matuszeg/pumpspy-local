@@ -1,7 +1,7 @@
 # pumpspy-local
 
 [![Validate](https://github.com/matuszeg/pumpspy-local/actions/workflows/validate.yml/badge.svg)](https://github.com/matuszeg/pumpspy-local/actions/workflows/validate.yml)
-[![HACS: custom repository](https://img.shields.io/badge/HACS-custom%20repository-41BDF5.svg)](https://hacs.xyz/)
+[![HACS: default](https://img.shields.io/badge/HACS-default-41BDF5.svg)](https://hacs.xyz/)
 
 **Local, cloud-free monitoring for PumpSpy and PitBoss+ sump pump battery backup systems, in [Home Assistant](https://www.home-assistant.io/).**
 
@@ -69,10 +69,8 @@ If you rely on those cloud alerts as a flood safety net, run the [fail-open shim
 
 ### Through HACS
 
-1. In HACS, open the three-dot menu and choose **Custom repositories**.
-2. Add `https://github.com/matuszeg/pumpspy-local`, with category **Integration**.
-3. Find *pumpspy-local* in the HACS list, install it, and restart Home Assistant.
-4. Go to **Settings → Devices & services → Add integration** and search for *pumpspy-local*.
+1. In HACS, search for *pumpspy-local*, install it, and restart Home Assistant.
+2. Go to **Settings → Devices & services → Add integration** and search for *pumpspy-local*.
 
 ### By hand
 

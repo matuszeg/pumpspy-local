@@ -13,8 +13,8 @@ listens for the device itself.
 
 ## 1. Install the integration
 
-Through [HACS](https://hacs.xyz/): add this repository as a custom repository of
-type *Integration*, install it, and restart Home Assistant.
+Through [HACS](https://hacs.xyz/): search for *pumpspy-local*, install it, and
+restart Home Assistant.
 
 By hand: copy `custom_components/pumpspy_local/` into your Home Assistant
 `config/custom_components/` directory and restart.
