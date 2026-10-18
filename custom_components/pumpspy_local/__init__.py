@@ -38,6 +38,7 @@ from .const import (
     SIGNAL_FIRMWARE,
     SIGNAL_NEW_DEVICE,
     SIGNAL_VENDOR,
+    TIME_PATH,
     signal_device_update,
     signal_pump_run,
 )
@@ -54,6 +55,7 @@ from .core.gallons import DEFAULT_FLOW_RATE
 from .core.novelty import Novelties
 from .core.parser import BbsReading, Ping, parse_request
 from .core.state import DeviceState
+from .core.timesync import TIME_CONTENT_TYPE, should_answer_time, time_response
 from .core.upstream import (
     DEFAULT_NAMESERVER,
     UpstreamAddress,
@@ -398,6 +400,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             return web.Response(status=502)
         return web.Response(status=response.status, body=response.body)
 
+    async def _handle_time(proxied: ProxyRequest) -> web.Response:
+        """Relay the device's clock sync, or answer it if the vendor cannot.
+
+        Relayed first, always, so a healthy vendor's clock is the one the
+        device gets. Logged at debug only: the line worth reading is the
+        reachability verdict changing, which already has one.
+        """
+        response = await _relay(proxied)
+        status = response.status if response is not None else None
+
+        if should_answer_time(runtime.vendor.reachable, status):
+            _LOGGER.debug("vendor unreachable -- answering the clock sync locally")
+            return web.Response(
+                status=200,
+                body=time_response(dt_util.utcnow()),
+                headers={"Content-Type": TIME_CONTENT_TYPE},
+            )
+
+        if response is None:
+            return web.Response(status=502)
+        return web.Response(status=response.status, body=response.body)
+
     async def handle(request: web.Request) -> web.Response:
         proxied = ProxyRequest(
             method=request.method,
@@ -423,6 +447,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # carries it, unmodified.
         if proxied.path.partition("?")[0] == AUTH_PATH:
             return await _handle_auth(proxied)
+
+        if proxied.path.partition("?")[0] == TIME_PATH:
+            return await _handle_time(proxied)
 
         response = await _relay(proxied)
 

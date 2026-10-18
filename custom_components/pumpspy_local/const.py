@@ -37,6 +37,9 @@ FIRMWARE_PATH = "/new_firmware"
 # normal operation and repeatedly when the vendor stops answering.
 AUTH_PATH = "/oauth/token"
 
+# The device's clock sync, asked on every reconnect and every re-authentication.
+TIME_PATH = "/tm"
+
 POLICY_OBSERVE = "observe"
 POLICY_QUARANTINE = "quarantine"
 DEFAULT_FIRMWARE_POLICY = POLICY_OBSERVE
